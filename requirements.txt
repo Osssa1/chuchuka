@@ -1,0 +1,13 @@
+django
+python-telegram-bot[job-queue]
+requests
+python-whois
+dnspython
+python-docx
+
+python-telegram-bot==21.7
+requests==2.32.3
+python-whois==0.9.6
+dnspython>=2.4.0
+python-docx>=1.0.0
+Django>=4.2
