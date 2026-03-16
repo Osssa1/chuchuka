@@ -8,4 +8,6 @@ urlpatterns = [
     path("consent/", views.consent_api),
     path("my-data/", views.my_data_api),
     path("request-deletion/", views.request_deletion_api),
+    path("spravka-profile/", views.spravka_profile_api),
+    path("spravka-profile/save/", views.spravka_profile_save_api),
 ]

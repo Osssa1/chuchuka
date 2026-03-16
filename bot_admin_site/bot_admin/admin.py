@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from django.contrib import admin, messages
-from .models import AllowedUser, BotVisitor, PersonalDataDeletionRequest
+from .models import AllowedUser, BotVisitor, PersonalDataDeletionRequest, SpravkaProfile
 
 
 @admin.register(AllowedUser)
@@ -66,3 +66,9 @@ class PersonalDataDeletionRequestAdmin(admin.ModelAdmin):
     search_fields = ("telegram_id", "note")
     readonly_fields = ("telegram_id", "requested_at")
     date_hierarchy = "requested_at"
+
+
+@admin.register(SpravkaProfile)
+class SpravkaProfileAdmin(admin.ModelAdmin):
+    list_display = ("telegram_id", "position", "unit", "rank", "updated_at")
+    search_fields = ("telegram_id", "position", "unit", "rank", "signature_name")

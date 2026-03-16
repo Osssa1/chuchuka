@@ -111,3 +111,42 @@ class PersonalDataDeletionRequest(models.Model):
 
     def __str__(self):
         return f"Telegram ID {self.telegram_id} — {self.get_status_display()} ({self.requested_at})"
+
+
+class SpravkaProfile(models.Model):
+    """Сохранённые реквизиты для формирования справки (должность, подразделение, звание, ФИО)."""
+    telegram_id = models.BigIntegerField(
+        unique=True,
+        db_index=True,
+        verbose_name="Telegram ID",
+    )
+    position = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name="Должность",
+    )
+    unit = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name="Подразделение",
+    )
+    rank = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name="Специальное звание",
+    )
+    signature_name = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name="ФИО для подписи",
+        help_text='Формат "И.И.Иванов"',
+    )
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Обновлено")
+
+    class Meta:
+        verbose_name = "Профиль для справки"
+        verbose_name_plural = "Профили для справок"
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"Профиль {self.telegram_id} ({self.position or ''} {self.unit or ''})"

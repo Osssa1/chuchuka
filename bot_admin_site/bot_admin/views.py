@@ -4,7 +4,7 @@ from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
-from .models import AllowedUser, BotVisitor, PersonalDataDeletionRequest
+from .models import AllowedUser, BotVisitor, PersonalDataDeletionRequest, SpravkaProfile
 
 
 @require_http_methods(["GET"])
@@ -119,9 +119,77 @@ def request_deletion_api(request):
     n_visitor, _ = BotVisitor.objects.filter(telegram_id=telegram_id).delete()
     n_allowed, _ = AllowedUser.objects.filter(telegram_id=telegram_id).delete()
     n_requests, _ = PersonalDataDeletionRequest.objects.filter(telegram_id=telegram_id).delete()
+    n_profiles, _ = SpravkaProfile.objects.filter(telegram_id=telegram_id).delete()
     return JsonResponse({
         "ok": True,
         "visitor_deleted": n_visitor > 0,
         "allowed_user_deleted": n_allowed > 0,
         "deletion_requests_deleted": n_requests > 0,
+        "profiles_deleted": n_profiles > 0,
+    })
+
+
+@require_http_methods(["GET"])
+def spravka_profile_api(request):
+    """
+    GET /api/spravka-profile/?telegram_id=123
+    Возвращает сохранённые реквизиты для справки (должность, подразделение, звание, ФИО)
+    по telegram_id. Используется ботом для предложения «использовать сохранённые данные».
+    """
+    try:
+        telegram_id = int(request.GET.get("telegram_id", 0))
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "telegram_id required (integer)"})
+    profile = SpravkaProfile.objects.filter(telegram_id=telegram_id).first()
+    if not profile:
+        return JsonResponse({"profile": None})
+    return JsonResponse({
+        "profile": {
+            "telegram_id": profile.telegram_id,
+            "position": profile.position,
+            "unit": profile.unit,
+            "rank": profile.rank,
+            "signature_name": profile.signature_name,
+            "updated_at": profile.updated_at.isoformat(),
+        }
+    })
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def spravka_profile_save_api(request):
+    """
+    POST /api/spravka-profile/
+    Тело: {"telegram_id": 123, "position": "...", "unit": "...", "rank": "...", "signature_name": "..."}
+    Создаёт или обновляет профиль для справки.
+    """
+    try:
+        body = json.loads(request.body or "{}")
+        telegram_id = int(body.get("telegram_id"))
+    except (ValueError, TypeError, KeyError):
+        return JsonResponse({"error": "telegram_id required (integer)"}, status=400)
+    position = (body.get("position") or "").strip()[:255]
+    unit = (body.get("unit") or "").strip()[:255]
+    rank = (body.get("rank") or "").strip()[:255]
+    signature_name = (body.get("signature_name") or "").strip()[:255]
+    profile, created = SpravkaProfile.objects.update_or_create(
+        telegram_id=telegram_id,
+        defaults={
+            "position": position,
+            "unit": unit,
+            "rank": rank,
+            "signature_name": signature_name,
+        },
+    )
+    return JsonResponse({
+        "ok": True,
+        "created": created,
+        "profile": {
+            "telegram_id": profile.telegram_id,
+            "position": profile.position,
+            "unit": profile.unit,
+            "rank": profile.rank,
+            "signature_name": profile.signature_name,
+            "updated_at": profile.updated_at.isoformat(),
+        },
     })

@@ -360,6 +360,51 @@ def _post_request_deletion_sync(telegram_id: int) -> dict:
         return {"ok": False}
 
 
+def _get_spravka_profile_sync(telegram_id: int) -> Optional[dict]:
+    """Получение сохранённого профиля для справки из Django."""
+    base = _get_api_base()
+    if not base:
+        return None
+    try:
+        r = requests.get(base + "spravka-profile/", params={"telegram_id": telegram_id}, timeout=5)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        return data.get("profile") or None
+    except Exception as e:
+        logger.debug("spravka-profile api failed: %s", e)
+        return None
+
+
+def _save_spravka_profile_sync(
+    telegram_id: int,
+    position: str,
+    unit: str,
+    rank: str,
+    signature_name: str,
+) -> bool:
+    """Сохранение/обновление профиля для справки в Django."""
+    base = _get_api_base()
+    if not base:
+        return False
+    try:
+        r = requests.post(
+            base + "spravka-profile/save/",
+            json={
+                "telegram_id": telegram_id,
+                "position": position,
+                "unit": unit,
+                "rank": rank,
+                "signature_name": signature_name,
+            },
+            timeout=5,
+        )
+        return r.status_code == 200 and r.json().get("ok") is True
+    except Exception as e:
+        logger.debug("spravka-profile-save api failed: %s", e)
+        return False
+
+
 def _record_visit_sync(telegram_id: int, username: str) -> None:
     """Синхронно отправляет в Django факт обращения пользователя (без блокировки бота)."""
     url = _get_visit_url()
@@ -766,6 +811,8 @@ SPRAVKA_RANKS = [
 ]
 
 SPRAVKA_WIZ_PREFIX = "spravka_wiz:"
+SPRAVKA_PROFILE_CHOICE_USE = "use"
+SPRAVKA_PROFILE_CHOICE_NEW = "new"
 
 
 def _spravka_position_keyboard() -> InlineKeyboardMarkup:
@@ -773,6 +820,32 @@ def _spravka_position_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t, callback_data=f"{SPRAVKA_WIZ_PREFIX}pos:{i}")]
         for i, t in enumerate(SPRAVKA_POSITIONS)
     ])
+
+
+def _spravka_profile_choice_keyboard(profile: dict) -> InlineKeyboardMarkup:
+    """Клавиатура выбора: использовать сохранённый профиль или ввести реквизиты заново."""
+    parts = []
+    pos = (profile.get("position") or "").strip()
+    unit = (profile.get("unit") or "").strip()
+    rank = (profile.get("rank") or "").strip()
+    name = (profile.get("signature_name") or "").strip()
+    if pos:
+        parts.append(pos)
+    if unit:
+        parts.append(unit)
+    if rank:
+        parts.append(rank)
+    if name:
+        parts.append(name)
+    summary = "; ".join(parts) if parts else "профиль заполнен"
+    text_use = f"Использовать сохранённые реквизиты ({summary})"
+    text_new = "Ввести реквизиты заново"
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(text_use[:64], callback_data=f"{SPRAVKA_WIZ_PREFIX}profile:{SPRAVKA_PROFILE_CHOICE_USE}")],
+            [InlineKeyboardButton(text_new, callback_data=f"{SPRAVKA_WIZ_PREFIX}profile:{SPRAVKA_PROFILE_CHOICE_NEW}")],
+        ]
+    )
 
 
 def _spravka_unit_keyboard() -> InlineKeyboardMarkup:
@@ -818,7 +891,7 @@ async def spravka_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 @_allowed_only
 async def spravka_wizard_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработка выбора должности / подразделения / звания в мастере справки."""
+    """Обработка выбора должности / подразделения / звания и профиля в мастере справки."""
     query = update.callback_query
     if not query.data or not query.data.startswith(SPRAVKA_WIZ_PREFIX):
         return
@@ -831,18 +904,87 @@ async def spravka_wizard_callback(update: Update, context: ContextTypes.DEFAULT_
     if len(parts) != 2:
         await query.answer()
         return
-    kind, idx_str = parts[0], parts[1]
-    try:
-        idx = int(idx_str)
-    except ValueError:
-        await query.answer()
-        return
+    kind, value = parts[0], parts[1]
     await query.answer()
     chat = query.message.chat
     try:
         await query.message.delete()
     except Exception:
         pass
+
+    if kind == "profile":
+        # Выбор: использовать сохранённые реквизиты или ввести заново
+        if value == SPRAVKA_PROFILE_CHOICE_USE:
+            # Пытаемся ещё раз получить профиль (на случай изменений)
+            user = update.effective_user
+            profile = None
+            if user:
+                profile = await asyncio.get_event_loop().run_in_executor(
+                    None, _get_spravka_profile_sync, user.id
+                )
+            if not profile:
+                # Профиль исчез — переходим к обычному сценарию выбора должности
+                pending["step"] = "position"
+                context.user_data[PENDING_SPRAVKA_KEY] = pending
+                await chat.send_message("Выберите должность:", reply_markup=_spravka_position_keyboard())
+                return
+            pending["position"] = (profile.get("position") or "").strip()
+            pending["unit"] = (profile.get("unit") or "").strip()
+            pending["rank"] = (profile.get("rank") or "").strip()
+            pending["signature_name"] = (profile.get("signature_name") or "").strip()
+            # Сразу формируем справку, как будто пользователь ввёл все данные
+            context.user_data[PENDING_SPRAVKA_KEY] = pending
+            lookup_type = pending["lookup_type"]
+            lookup_value = pending["value"]
+            case_num = pending.get("case_num") or ""
+            position = pending.get("position") or ""
+            unit = pending.get("unit") or ""
+            rank = pending.get("rank") or ""
+            name = pending.get("signature_name") or ""
+            del context.user_data[PENDING_SPRAVKA_KEY]
+            status_msg = await chat.send_message("Формирую справку…")
+            try:
+                content, filename = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: get_spravka_word(
+                        lookup_type,
+                        lookup_value,
+                        case_num=case_num or None,
+                        position=position or None,
+                        unit=unit or None,
+                        rank=rank or None,
+                        signature_name=name or None,
+                    ),
+                )
+                doc = InputFile(BytesIO(content), filename=filename)
+                await chat.send_document(
+                    document=doc,
+                    caption=f"📄 Справка: {lookup_type} — {lookup_value[:30]}{'…' if len(lookup_value) > 30 else ''}",
+                )
+            except ValueError as e:
+                await chat.send_message(str(e))
+            except Exception as e:
+                logger.warning("spravka (profile use) failed: %s", e)
+                await chat.send_message("Не удалось сформировать справку.")
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+            return
+        elif value == SPRAVKA_PROFILE_CHOICE_NEW:
+            pending["step"] = "position"
+            context.user_data[PENDING_SPRAVKA_KEY] = pending
+            await chat.send_message("Выберите должность:", reply_markup=_spravka_position_keyboard())
+            return
+        else:
+            await query.answer()
+            return
+
+    try:
+        idx = int(value)
+    except ValueError:
+        await query.answer()
+        return
 
     if kind == "pos" and 0 <= idx < len(SPRAVKA_POSITIONS):
         pending["position"] = SPRAVKA_POSITIONS[idx]
@@ -1023,9 +1165,27 @@ async def message_ip_or_domain(update: Update, context: ContextTypes.DEFAULT_TYP
         step = pending.get("step")
         if step == "case_num":
             pending["case_num"] = text
-            pending["step"] = "position"
+            pending["step"] = "profile_choice"
             context.user_data[PENDING_SPRAVKA_KEY] = pending
-            await update.message.reply_text("Выберите должность:", reply_markup=_spravka_position_keyboard())
+            # Пробуем получить сохранённый профиль и предложить выбор
+            user = update.effective_user
+            profile = None
+            if user:
+                profile = await asyncio.get_event_loop().run_in_executor(
+                    None, _get_spravka_profile_sync, user.id
+                )
+            if profile:
+                await update.message.reply_text(
+                    "Найден сохранённый профиль реквизитов для справки.\n"
+                    "Вы можете использовать его или ввести реквизиты заново.",
+                    reply_markup=_spravka_profile_choice_keyboard(profile),
+                )
+            else:
+                pending["step"] = "position"
+                context.user_data[PENDING_SPRAVKA_KEY] = pending
+                await update.message.reply_text(
+                    "Выберите должность:", reply_markup=_spravka_position_keyboard()
+                )
             return
         if step == "name":
             pending["signature_name"] = text
@@ -1040,6 +1200,18 @@ async def message_ip_or_domain(update: Update, context: ContextTypes.DEFAULT_TYP
             del context.user_data[PENDING_SPRAVKA_KEY]
             status_msg = await update.message.reply_text("Формирую справку…")
             try:
+                # Сохраняем/обновляем профиль реквизитов для справки в Django
+                user = update.effective_user
+                if user:
+                    await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        _save_spravka_profile_sync,
+                        user.id,
+                        position,
+                        unit,
+                        rank,
+                        name,
+                    )
                 content, filename = await asyncio.get_event_loop().run_in_executor(
                     None,
                     lambda: get_spravka_word(
