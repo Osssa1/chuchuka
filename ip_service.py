@@ -22,7 +22,6 @@ E_SECURITY, E_SCHEME, E_TYPE = "🔒", "🏦", "📋"
 E_STAR, E_WARN, E_TIME = "⭐", "⚠️", "🕐"
 
 import requests
-import whois
 
 try:
     import dns.resolver
@@ -39,10 +38,13 @@ SPRAVKA_RANK = ""  # например "старший лейтенант юст�
 SPRAVKA_NAME = ""  # например "И.И.Иванов"
 
 API_URL = "https://api.ipapi.is/"
-WHO_DAT_URL = "https://who-dat.as93.net"
+WHOISJSON_URL = "https://whoisjson.com/api/v1/whois"
+RDAP_DOMAIN_URL = "https://rdap.org/domain"
+VIEWDNS_WHOIS_URL = "https://viewdns.info/whois/"
 HANDYAPI_BIN_URL = "https://data.handyapi.com/bin"
 # Ключи внешних API берём из переменных окружения, чтобы не хранить секреты в репозитории.
 HANDYAPI_KEY = os.environ.get("HANDYAPI_KEY", "")
+WHOISJSON_KEY = os.environ.get("WHOISJSON_KEY", "")
 NUMVERIFY_URL = "https://apilayer.net/api/validate"
 NUMVERIFY_KEY = os.environ.get("NUMVERIFY_KEY", "")
 # Криптокошелёк: ETH (Etherscan), BTC (BlockCypher), TRON (TronGrid)
@@ -325,7 +327,7 @@ def _extract_registrar_country(data: Any) -> Optional[str]:
             vcard = entity.get("vcardArray") or entity.get("vCardArray")
             if not vcard or not isinstance(vcard, list):
                 continue
-            for prop in vcard:
+            for prop in _iter_vcard_properties(vcard):
                 if not isinstance(prop, list) or len(prop) < 4:
                     continue
                 if prop[0] == "adr":
@@ -377,7 +379,7 @@ def _extract_registrar_url(data: Any) -> Optional[str]:
             vcard = entity.get("vcardArray") or entity.get("vCardArray")
             if not vcard or not isinstance(vcard, list):
                 continue
-            for prop in vcard:
+            for prop in _iter_vcard_properties(vcard):
                 if not isinstance(prop, list) or len(prop) < 4:
                     continue
                 if prop[0] == "url":
@@ -391,111 +393,333 @@ def _extract_registrar_url(data: Any) -> Optional[str]:
     return None
 
 
+def _iter_vcard_properties(vcard: Any) -> list[Any]:
+    """Нормализует RDAP vcardArray к списку свойств."""
+    if not isinstance(vcard, list):
+        return []
+    if len(vcard) >= 2 and isinstance(vcard[1], list):
+        inner = vcard[1]
+        if not inner or isinstance(inner[0], list):
+            return inner
+    return vcard
+
+
+def _clean_lookup_value(val: Any) -> Optional[str]:
+    """Возвращает осмысленное строковое значение или None."""
+    s = _str_or_first(val)
+    return s if s and s != "—" else None
+
+
+def _extract_registrar_name(data: Any) -> Optional[str]:
+    """Извлекает имя регистратора из WhoisJSON/RDAP/ViewDNS-подобных ответов."""
+    if data is None:
+        return None
+    if isinstance(data, dict):
+        direct = _get_nested(
+            data,
+            "registrarName",
+            "registrar.name",
+            "registrar_name",
+            "registrar.organization",
+            "registrar.org",
+            "registrar",
+        )
+        if isinstance(direct, dict):
+            direct = _get_nested(direct, "name", "organization", "org")
+        s = _clean_lookup_value(direct)
+        if s:
+            return s
+
+        entities = data.get("entities") or []
+        if isinstance(entities, dict):
+            entities = [entities]
+        for entity in entities:
+            if not isinstance(entity, dict):
+                continue
+            roles = entity.get("roles") or entity.get("role") or []
+            if isinstance(roles, str):
+                roles = [roles]
+            if "registrar" not in roles:
+                continue
+            vcard = entity.get("vcardArray") or entity.get("vCardArray")
+            if not vcard or not isinstance(vcard, list):
+                continue
+            for prop in _iter_vcard_properties(vcard):
+                if not isinstance(prop, list) or len(prop) < 4:
+                    continue
+                if prop[0] in ("fn", "org"):
+                    value = prop[3] if len(prop) > 3 else None
+                    s = _clean_lookup_value(value)
+                    if s:
+                        return s
+        return None
+    return _clean_lookup_value(data)
+
+
+def _extract_rdap_event_date(data: Any, *actions: str) -> Optional[str]:
+    """Извлекает дату из RDAP events по eventAction."""
+    if not isinstance(data, dict):
+        return None
+    expected = {a.strip().lower() for a in actions if a.strip()}
+    for event in data.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        action = str(event.get("eventAction") or event.get("action") or "").strip().lower()
+        if action not in expected:
+            continue
+        value = event.get("eventDate") or event.get("date")
+        formatted = _format_date(value)
+        if formatted != "—":
+            return formatted
+    return None
+
+
+def _has_domain_lookup_data(result: dict[str, Any]) -> bool:
+    """Проверяет, содержит ли нормализованный ответ полезные поля."""
+    return any(
+        result.get(key)
+        for key in ("created", "expires", "registrar_name", "registrar_country", "registrar_url")
+    )
+
+
+def _normalize_domain_lookup(
+    domain: str,
+    data: dict[str, Any],
+    *,
+    source_name: str,
+    source_ref: str,
+    use_rdap_events: bool = False,
+) -> Optional[dict[str, Any]]:
+    """Сводит ответы разных сервисов к общей структуре."""
+    parsed_domain = _clean_lookup_value(
+        _get_nested(
+            data,
+            "domainName",
+            "domain_name",
+            "domain",
+            "ldhName",
+            "unicodeName",
+            "name",
+        )
+    ) or domain
+    parsed_domain = parsed_domain.lower()
+
+    created = _clean_lookup_value(
+        _get_nested(
+            data,
+            "created",
+            "createdDate",
+            "creationDate",
+            "created_date",
+            "creation_date",
+            "standardCreatedDate",
+        )
+    )
+    expires = _clean_lookup_value(
+        _get_nested(
+            data,
+            "expires",
+            "expiresDate",
+            "expirationDate",
+            "expiryDate",
+            "expiration_date",
+            "expires_date",
+            "standardExpiresDate",
+        )
+    )
+    if use_rdap_events:
+        created = created or _extract_rdap_event_date(
+            data, "registration", "registered", "creation", "created"
+        )
+        expires = expires or _extract_rdap_event_date(
+            data, "expiration", "expiry", "expires", "renewal"
+        )
+
+    result = {
+        "domain": parsed_domain,
+        "created": created,
+        "expires": expires,
+        "registrar_name": _extract_registrar_name(data),
+        "registrar_country": _extract_registrar_country(data),
+        "registrar_url": _extract_registrar_url(data),
+        "source_name": source_name,
+        "source_ref": source_ref,
+    }
+    return result if _has_domain_lookup_data(result) else None
+
+
+def _fetch_domain_lookup_whoisjson(domain: str) -> Optional[dict[str, Any]]:
+    """Основной lookup через WhoisJSON."""
+    if not WHOISJSON_KEY:
+        return None
+    try:
+        r = requests.get(
+            WHOISJSON_URL,
+            params={"domain": domain},
+            headers={
+                "Authorization": f"TOKEN={WHOISJSON_KEY}",
+                "Accept": "application/json",
+            },
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if not isinstance(data, dict):
+            return None
+        return _normalize_domain_lookup(
+            domain,
+            data,
+            source_name="WhoisJSON",
+            source_ref="https://whoisjson.com/",
+        )
+    except requests.RequestException as e:
+        logger.warning("WhoisJSON lookup failed for %s: %s", domain, e)
+    except (ValueError, KeyError, TypeError) as e:
+        logger.warning("WhoisJSON parse failed for %s: %s", domain, e)
+    return None
+
+
+def _fetch_domain_lookup_rdap(domain: str) -> Optional[dict[str, Any]]:
+    """Фолбэк lookup через RDAP.org."""
+    try:
+        r = requests.get(
+            f"{RDAP_DOMAIN_URL}/{domain}",
+            headers={"Accept": "application/rdap+json, application/json"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if not isinstance(data, dict):
+            return None
+        return _normalize_domain_lookup(
+            domain,
+            data,
+            source_name="RDAP.org",
+            source_ref="https://rdap.org/",
+            use_rdap_events=True,
+        )
+    except requests.RequestException as e:
+        logger.warning("RDAP lookup failed for %s: %s", domain, e)
+    except (ValueError, KeyError, TypeError) as e:
+        logger.warning("RDAP parse failed for %s: %s", domain, e)
+    return None
+
+
+def _extract_viewdns_value(text: str, *patterns: str) -> Optional[str]:
+    """Ищет первое совпадение по regex в HTML ViewDNS."""
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+        if not match:
+            continue
+        value = html.unescape(match.group(1)).replace("\\/", "/").strip()
+        if value and value.lower() != "null":
+            return value
+    return None
+
+
+def _fetch_domain_lookup_viewdns(domain: str) -> Optional[dict[str, Any]]:
+    """Резервный lookup через публичную HTML-страницу ViewDNS."""
+    try:
+        r = requests.get(
+            VIEWDNS_WHOIS_URL,
+            params={"domain": domain},
+            headers={
+                "Accept": "text/html,application/xhtml+xml",
+                "User-Agent": "Mozilla/5.0",
+            },
+            timeout=12,
+        )
+        r.raise_for_status()
+        text = r.text
+    except requests.RequestException as e:
+        logger.warning("ViewDNS lookup failed for %s: %s", domain, e)
+        return None
+
+    payload = {
+        "domainName": _extract_viewdns_value(text, r'"domainName"\s*:\s*"([^"]+)"'),
+        "registrarName": _extract_viewdns_value(
+            text,
+            r'"registrarName"\s*:\s*"([^"]*)"',
+            r"Registrar:\s*([^\\\"<]+)",
+        ),
+        "createdDate": _extract_viewdns_value(
+            text,
+            r'"standardCreatedDate"\s*:\s*"([^"]+)"',
+            r'"createdDate"\s*:\s*"([^"]+)"',
+            r"Creation Date:\s*([^\\\"<]+)",
+        ),
+        "expiresDate": _extract_viewdns_value(
+            text,
+            r'"standardExpiresDate"\s*:\s*"([^"]+)"',
+            r'"expiresDate"\s*:\s*"([^"]+)"',
+            r"Expiration Date:\s*([^\\\"<]+)",
+            r"Registrar Registration Expiration Date:\s*([^\\\"<]+)",
+        ),
+        "registrarUrl": _extract_viewdns_value(
+            text,
+            r"Registrar URL:\s*([^\\\"<]+)",
+        ),
+    }
+    return _normalize_domain_lookup(
+        domain,
+        payload,
+        source_name="ViewDNS.info",
+        source_ref="https://viewdns.info/",
+    )
+
+
+def _get_domain_lookup(domain: str) -> Optional[dict[str, Any]]:
+    """Оптимизированная цепочка: WhoisJSON -> RDAP.org -> ViewDNS."""
+    for fetcher in (
+        _fetch_domain_lookup_whoisjson,
+        _fetch_domain_lookup_rdap,
+        _fetch_domain_lookup_viewdns,
+    ):
+        result = fetcher(domain)
+        if result is not None:
+            return result
+    return None
+
+
+def _format_domain_lookup_text(result: dict[str, Any]) -> str:
+    """Форматирует нормализованный доменный ответ в HTML."""
+    reg_country_line = (
+        f"\n{E_COUNTRY} <b>Страна регистратора:</b> {_h(result.get('registrar_country'))}"
+        if result.get("registrar_country")
+        else ""
+    )
+    reg_url_line = (
+        f'\n{E_LINK} <b>Сайт:</b> <a href="{_h(result.get("registrar_url"))}">{_h(result.get("registrar_url"))}</a>'
+        if result.get("registrar_url")
+        else ""
+    )
+    return (
+        f"{E_DOMAIN} <b>Информация по домену</b>: <code>{_h(result.get('domain'))}</code>\n"
+        f"{DIV}\n"
+        f"{E_DATE} <b>Создан:</b> {_h(result.get('created'))}\n"
+        f"{E_DATE} <b>Истекает:</b> {_h(result.get('expires'))}\n"
+        f"{E_ORG} <b>Регистратор:</b> {_h(result.get('registrar_name'))}"
+        f"{reg_country_line}{reg_url_line}"
+    )
+
+
 def get_domain_info(domain: str) -> str:
     """
-    Получает информацию о регистрации домена через who-dat.as93.net
-    (WHOIS/RDAP lookup API, без API-ключа).
-
-    Возвращает строки:
-    Parsed domain name, Registrar name, WHOIS server, Country.
+    Получает информацию о регистрации домена через каскад бесплатных источников:
+    WhoisJSON -> RDAP.org -> ViewDNS.
     """
     domain = domain.strip().lower()
     if not _validate_domain(domain):
         return "Неверный формат доменного имени. Пример: example.com"
 
-    # Сначала пробуем who-dat.as93.net
-    text: Optional[str] = None
-    try:
-        r = requests.get(
-            f"{WHO_DAT_URL}/{domain}",
-            timeout=15,
-            headers={"Accept": "application/json"},
-        )
-        r.raise_for_status()
-        data = r.json()
+    result = _get_domain_lookup(domain)
+    if result is not None:
+        return _format_domain_lookup_text(result)
 
-        parsed_domain = _str_or_first(
-            _get_nested(
-                data,
-                "domainName",
-                "domain_name",
-                "domain",
-                "name",
-            )
-        ) or domain
-        registrar_name = _str_or_first(
-            _get_nested(data, "registrarName", "registrar_name", "registrar")
-        )
-        created = _format_date(
-            _get_nested(
-                data,
-                "creationDate",
-                "createdDate",
-                "created_date",
-                "creation_date",
-            )
-        )
-        expires = _format_date(
-            _get_nested(
-                data,
-                "expirationDate",
-                "expiresDate",
-                "expiryDate",
-                "expiration_date",
-                "expires_date",
-            )
-        )
-        registrar_country = _extract_registrar_country(data)
-        registrar_url = _extract_registrar_url(data)
-        reg_country_line = f"\n{E_COUNTRY} <b>Страна регистратора:</b> {_h(registrar_country)}" if registrar_country else ""
-        reg_url_line = f'\n{E_LINK} <b>Сайт:</b> <a href="{_h(registrar_url)}">{_h(registrar_url)}</a>' if registrar_url else ""
-
-        text = (
-            f"{E_DOMAIN} <b>Информация по домену</b>: <code>{_h(parsed_domain)}</code>\n"
-            f"{DIV}\n"
-            f"{E_DATE} <b>Создан:</b> {_h(created)}\n"
-            f"{E_DATE} <b>Истекает:</b> {_h(expires)}\n"
-            f"{E_ORG} <b>Регистратор:</b> {_h(registrar_name)}{reg_country_line}{reg_url_line}"
-        )
-    except requests.RequestException as e:
-        logger.warning("who-dat request failed: %s", e)
-    except (ValueError, KeyError) as e:
-        logger.warning("who-dat parse error: %s", e)
-
-    if text:
-        return text
-
-    # Фолбэк: прямой WHOIS через python-whois (без внешнего API)
-    try:
-        w = whois.whois(domain)
-        parsed_domain = _str_or_first(getattr(w, "domain_name", None)) or domain
-        registrar_name = _str_or_first(getattr(w, "registrar", None))
-        created = _format_date(getattr(w, "creation_date", None))
-        expires = _format_date(getattr(w, "expiration_date", None))
-        registrar_country = _str_or_first(
-            getattr(w, "registrar_country", None) or w.get("registrar_country")
-        )
-        registrar_country = registrar_country if registrar_country and registrar_country != "—" else None
-        registrar_url = _str_or_first(
-            getattr(w, "registrar_url", None) or w.get("registrar_url")
-        )
-        registrar_url = registrar_url if registrar_url and registrar_url != "—" else None
-        if registrar_url and not registrar_url.startswith(("http://", "https://")):
-            registrar_url = f"https://{registrar_url}"
-        reg_country_line = f"\n{E_COUNTRY} <b>Страна регистратора:</b> {_h(registrar_country)}" if registrar_country else ""
-        reg_url_line = f'\n{E_LINK} <b>Сайт:</b> <a href="{_h(registrar_url)}">{_h(registrar_url)}</a>' if registrar_url else ""
-
-        return (
-            f"{E_DOMAIN} <b>Информация по домену</b>: <code>{_h(parsed_domain)}</code>\n"
-            f"{DIV}\n"
-            f"{E_DATE} <b>Создан:</b> {_h(created)}\n"
-            f"{E_DATE} <b>Истекает:</b> {_h(expires)}\n"
-            f"{E_ORG} <b>Регистратор:</b> {_h(registrar_name)}{reg_country_line}{reg_url_line}"
-        )
-    except Exception as e:
-        logger.warning("python-whois lookup failed: %s", e)
-
-    return "Не удалось получить WHOIS по этому домену. Проверьте имя или попробуйте позже."
+    return (
+        "Не удалось получить WHOIS по этому домену. "
+        "Проверьте имя, WHOISJSON_KEY или попробуйте позже."
+    )
 
 
 E_DNS = "🔗"
@@ -1501,44 +1725,15 @@ def get_spravka_word(
 
     elif lookup_type == "domain":
         domain = value.strip().lower()
-        data = None
-        try:
-            r = requests.get(
-                f"{WHO_DAT_URL}/{domain}",
-                timeout=15,
-                headers={"Accept": "application/json"},
-            )
-            r.raise_for_status()
-            data = r.json()
-        except Exception as e:
-            logger.warning("who-dat failed for spravka (domain=%s): %s", domain, e)
-
-        if data is not None:
-            created = _format_date(_get_nested(data, "creationDate", "createdDate"))
-            expires = _format_date(_get_nested(data, "expirationDate", "expiresDate"))
-            registrar = _str_or_first(_get_nested(data, "registrarName", "registrar_name"))
-            content_lines = [
-                f"Создан: {created or '–'}",
-                f"Истекает: {expires or '–'}",
-                f"Регистратор: {registrar or '–'}",
-            ]
-            source_url = WHO_DAT_URL
-        else:
-            # Фолбэк: python-whois (как в get_domain_info) — в Справочно указываем OSINT-методы
-            try:
-                w = whois.whois(domain)
-                created = _format_date(getattr(w, "creation_date", None))
-                expires = _format_date(getattr(w, "expiration_date", None))
-                registrar = _str_or_first(getattr(w, "registrar", None))
-                content_lines = [
-                    f"Создан: {created or '–'}",
-                    f"Истекает: {expires or '–'}",
-                    f"Регистратор: {registrar or '–'}",
-                ]
-                ref_osint = True
-            except Exception as e:
-                logger.warning("whois fallback failed for spravka: %s", e)
-                raise ValueError("Не удалось получить данные по домену")
+        result = _get_domain_lookup(domain)
+        if result is None:
+            raise ValueError("Не удалось получить данные по домену")
+        content_lines = [
+            f"Создан: {result.get('created') or '–'}",
+            f"Истекает: {result.get('expires') or '–'}",
+            f"Регистратор: {result.get('registrar_name') or '–'}",
+        ]
+        source_url = result.get("source_name") or result.get("source_ref") or "—"
 
     elif lookup_type == "bin":
         if not HANDYAPI_KEY:
