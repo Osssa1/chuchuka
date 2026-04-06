@@ -823,13 +823,15 @@ def _spravka_position_keyboard() -> InlineKeyboardMarkup:
 
 
 def _spravka_profile_choice_keyboard(profile: dict) -> InlineKeyboardMarkup:
-    """Клавиатура выбора: использовать сохранённые должность и ФИО или ввести новые."""
+    """Клавиатура выбора: использовать весь сохранённый профиль или ввести новый."""
     pos = (profile.get("position") or "").strip()
+    unit = (profile.get("unit") or "").strip()
+    rank = (profile.get("rank") or "").strip()
     name = (profile.get("signature_name") or "").strip()
-    summary_parts = [part for part in (pos, name) if part]
+    summary_parts = [part for part in (pos, unit, rank, name) if part]
     summary = "; ".join(summary_parts) if summary_parts else "сохранённые данные"
     text_use = f"Применить сохранённые ({summary})"
-    text_new = "Ввести новые должность и ФИО"
+    text_new = "Ввести новый профиль"
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton(text_use[:64], callback_data=f"{SPRAVKA_WIZ_PREFIX}profile:{SPRAVKA_PROFILE_CHOICE_USE}")],
@@ -838,11 +840,14 @@ def _spravka_profile_choice_keyboard(profile: dict) -> InlineKeyboardMarkup:
     )
 
 
-def _spravka_profile_has_saved_identity(profile: Optional[dict]) -> bool:
-    """Есть ли в профиле сохранённые должность и ФИО."""
+def _spravka_profile_is_complete(profile: Optional[dict]) -> bool:
+    """Есть ли в профиле полный набор реквизитов для справки."""
     if not profile:
         return False
-    return bool((profile.get("position") or "").strip() and (profile.get("signature_name") or "").strip())
+    return all(
+        (profile.get(key) or "").strip()
+        for key in ("position", "unit", "rank", "signature_name")
+    )
 
 
 async def _finish_spravka_flow(
@@ -945,7 +950,7 @@ async def spravka_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 @_allowed_only
 async def spravka_wizard_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработка выбора реквизитов и сохранённых должности/ФИО в мастере справки."""
+    """Обработка выбора реквизитов и сохранённого профиля в мастере справки."""
     query = update.callback_query
     if not query.data or not query.data.startswith(SPRAVKA_WIZ_PREFIX):
         return
@@ -967,7 +972,7 @@ async def spravka_wizard_callback(update: Update, context: ContextTypes.DEFAULT_
         pass
 
     if kind == "profile":
-        # Выбор: использовать сохранённые должность и ФИО или ввести заново
+        # Выбор: использовать весь сохранённый профиль или ввести заново
         if value == SPRAVKA_PROFILE_CHOICE_USE:
             user = update.effective_user
             profile = None
@@ -975,26 +980,23 @@ async def spravka_wizard_callback(update: Update, context: ContextTypes.DEFAULT_
                 profile = await asyncio.get_event_loop().run_in_executor(
                     None, _get_spravka_profile_sync, user.id
                 )
-            if not _spravka_profile_has_saved_identity(profile):
+            if not _spravka_profile_is_complete(profile):
                 pending["step"] = "position"
-                pending.pop("use_saved_identity", None)
                 context.user_data[PENDING_SPRAVKA_KEY] = pending
                 await chat.send_message("Выберите должность:", reply_markup=_spravka_position_keyboard())
                 return
             pending["position"] = (profile.get("position") or "").strip()
+            pending["unit"] = (profile.get("unit") or "").strip()
+            pending["rank"] = (profile.get("rank") or "").strip()
             pending["signature_name"] = (profile.get("signature_name") or "").strip()
-            pending["step"] = "unit"
-            pending["use_saved_identity"] = True
             context.user_data[PENDING_SPRAVKA_KEY] = pending
-            await chat.send_message(
-                "Применяю сохранённые должность и ФИО.\nВыберите следственное подразделение:",
-                reply_markup=_spravka_unit_keyboard(),
-            )
+            await _finish_spravka_flow(chat, context, pending, update.effective_user)
             return
         elif value == SPRAVKA_PROFILE_CHOICE_NEW:
             pending.pop("position", None)
+            pending.pop("unit", None)
+            pending.pop("rank", None)
             pending.pop("signature_name", None)
-            pending.pop("use_saved_identity", None)
             pending["step"] = "position"
             context.user_data[PENDING_SPRAVKA_KEY] = pending
             await chat.send_message("Выберите должность:", reply_markup=_spravka_position_keyboard())
@@ -1021,12 +1023,9 @@ async def spravka_wizard_callback(update: Update, context: ContextTypes.DEFAULT_
         await chat.send_message("Выберите звание:", reply_markup=_spravka_rank_keyboard())
     elif kind == "rank" and 0 <= idx < len(SPRAVKA_RANKS):
         pending["rank"] = SPRAVKA_RANKS[idx]
-        if pending.get("use_saved_identity") and pending.get("signature_name"):
-            await _finish_spravka_flow(chat, context, pending, update.effective_user)
-        else:
-            pending["step"] = "name"
-            context.user_data[PENDING_SPRAVKA_KEY] = pending
-            await chat.send_message('Введите ФИО в формате "И.И.Иванов":')
+        pending["step"] = "name"
+        context.user_data[PENDING_SPRAVKA_KEY] = pending
+        await chat.send_message('Введите ФИО в формате "И.И.Иванов":')
 
 
 @_allowed_only
@@ -1193,17 +1192,17 @@ async def message_ip_or_domain(update: Update, context: ContextTypes.DEFAULT_TYP
             pending["case_num"] = text
             pending["step"] = "profile_choice"
             context.user_data[PENDING_SPRAVKA_KEY] = pending
-            # Пробуем получить сохранённые должность и ФИО и предложить выбор
+            # Пробуем получить полный сохранённый профиль и предложить выбор
             user = update.effective_user
             profile = None
             if user:
                 profile = await asyncio.get_event_loop().run_in_executor(
                     None, _get_spravka_profile_sync, user.id
                 )
-            if _spravka_profile_has_saved_identity(profile):
+            if _spravka_profile_is_complete(profile):
                 await update.message.reply_text(
-                    "Найдены ранее введённые должность и ФИО.\n"
-                    "Выберите: применить их или ввести новые значения.",
+                    "Найден ранее сохранённый профиль для справки.\n"
+                    "Выберите: применить его целиком или ввести новые значения.",
                     reply_markup=_spravka_profile_choice_keyboard(profile),
                 )
             else:
@@ -1216,7 +1215,6 @@ async def message_ip_or_domain(update: Update, context: ContextTypes.DEFAULT_TYP
         if step == "name":
             pending["signature_name"] = text
             context.user_data[PENDING_SPRAVKA_KEY] = pending
-            pending.pop("use_saved_identity", None)
             await _finish_spravka_flow(update.message.chat, context, pending, update.effective_user)
             return
 
