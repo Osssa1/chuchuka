@@ -43,14 +43,13 @@ WHOISJSON_URL = "https://whoisjson.com/api/v1/whois"
 RDAP_DOMAIN_URL = "https://rdap.org/domain"
 VIEWDNS_WHOIS_URL = "https://viewdns.info/whois/"
 HANDYAPI_BIN_URL = "https://data.handyapi.com/bin"
-OCR_SPACE_URL = "https://api.ocr.space/parse/image"
 # Резервный BIN без ключа: lookup.binlist.net (лимит ~5 запросов/час, см. binlist.net).
 BINLIST_LOOKUP_URL = "https://lookup.binlist.net"
 # Ключи внешних API берём из переменных окружения, чтобы не хранить секреты в репозитории.
 HANDYAPI_KEY = os.environ.get("HANDYAPI_KEY", "")
 WHOISJSON_KEY = os.environ.get("WHOISJSON_KEY", "")
-OCR_SPACE_API_KEY = os.environ.get("OCR_SPACE_API_KEY", "helloworld")
-OCR_SPACE_LANGUAGE = os.environ.get("OCR_SPACE_LANGUAGE", "rus")
+TESSERACT_CMD = os.environ.get("TESSERACT_CMD", "")
+TESSERACT_LANGUAGE = os.environ.get("TESSERACT_LANGUAGE", "rus+eng")
 NUMVERIFY_URL = "https://apilayer.net/api/validate"
 NUMVERIFY_KEY = os.environ.get("NUMVERIFY_KEY", "")
 # Криптокошелёк: ETH (Etherscan), BTC (BlockCypher), TRON (TronGrid)
@@ -1235,7 +1234,8 @@ def get_phone_info(phone: str) -> str:
 # ============ OCR сканов в Word ============
 
 OCR_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
-OCR_MAX_FILE_SIZE = 1024 * 1024  # бесплатный OCR.Space: до 1 MB
+OCR_MAX_FILE_SIZE = 10 * 1024 * 1024
+OCR_MAX_PDF_PAGES = 10
 
 
 def _normalize_ocr_text(text: str) -> str:
@@ -1252,22 +1252,90 @@ def _ocr_extension(filename: str) -> str:
     return ext
 
 
-def _ocr_mime_type(filename: str) -> str:
-    """MIME по имени файла."""
-    ext = _ocr_extension(filename)
-    if ext == ".pdf":
-        return "application/pdf"
-    if ext in (".jpg", ".jpeg"):
-        return "image/jpeg"
-    if ext == ".png":
-        return "image/png"
-    return "application/octet-stream"
+def _get_tesseract():
+    """Лениво импортирует и настраивает pytesseract."""
+    try:
+        import pytesseract
+    except ImportError as e:
+        raise RuntimeError(
+            "Не установлен pytesseract. Установите зависимости из requirements.txt."
+        ) from e
+    if TESSERACT_CMD:
+        pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
+    return pytesseract
+
+
+def _ocr_text_from_pil_image(image: Any) -> str:
+    """Распознаёт текст с PIL-изображения локальным Tesseract."""
+    pytesseract = _get_tesseract()
+    try:
+        processed = image.convert("L")
+        text = pytesseract.image_to_string(
+            processed,
+            lang=TESSERACT_LANGUAGE,
+            config="--psm 6",
+        )
+    except pytesseract.pytesseract.TesseractNotFoundError as e:
+        raise RuntimeError(
+            "Не найден бинарник tesseract. Установите tesseract-ocr и язык rus на сервере."
+        ) from e
+    return _normalize_ocr_text(text)
+
+
+def _ocr_text_from_image_bytes(file_bytes: bytes) -> str:
+    """OCR локального изображения."""
+    try:
+        from PIL import Image
+    except ImportError as e:
+        raise RuntimeError(
+            "Не установлен Pillow. Установите зависимости из requirements.txt."
+        ) from e
+    try:
+        with Image.open(BytesIO(file_bytes)) as image:
+            text = _ocr_text_from_pil_image(image)
+    except Exception as e:
+        raise RuntimeError("Не удалось открыть изображение для OCR.") from e
+    return text
+
+
+def _ocr_text_from_pdf_bytes(file_bytes: bytes) -> str:
+    """OCR локального PDF: рендер страниц и распознавание через Tesseract."""
+    try:
+        import pypdfium2 as pdfium
+    except ImportError as e:
+        raise RuntimeError(
+            "Не установлен pypdfium2. Установите зависимости из requirements.txt."
+        ) from e
+
+    try:
+        pdf = pdfium.PdfDocument(file_bytes)
+    except Exception as e:
+        raise RuntimeError("Не удалось открыть PDF для OCR.") from e
+
+    try:
+        page_count = len(pdf)
+        if page_count > OCR_MAX_PDF_PAGES:
+            raise ValueError(f"PDF слишком большой: поддерживается до {OCR_MAX_PDF_PAGES} страниц.")
+        parts: list[str] = []
+        for idx in range(page_count):
+            page = pdf[idx]
+            bitmap = page.render(scale=2)
+            image = bitmap.to_pil()
+            text = _ocr_text_from_pil_image(image)
+            if text:
+                parts.append(text)
+        return "\n\n".join(parts).strip()
+    finally:
+        try:
+            pdf.close()
+        except Exception:
+            pass
 
 
 def extract_text_from_scan(file_bytes: bytes, filename: str) -> str:
     """
-    OCR для фото/PDF через OCR.Space.
-    Бесплатный тариф: до 1 MB и до 3 страниц PDF.
+    Локальный OCR для фото/PDF через Tesseract.
+    Файлы не отправляются во внешние сервисы.
     """
     if not file_bytes:
         raise ValueError("Файл пустой.")
@@ -1276,51 +1344,9 @@ def extract_text_from_scan(file_bytes: bytes, filename: str) -> str:
     if ext not in OCR_ALLOWED_EXTENSIONS:
         raise ValueError("Поддерживаются JPG, PNG и PDF.")
     if len(file_bytes) > OCR_MAX_FILE_SIZE:
-        raise ValueError("Для бесплатного OCR размер файла должен быть не больше 1 МБ.")
+        raise ValueError("Файл слишком большой для локального OCR (до 10 МБ).")
 
-    try:
-        r = requests.post(
-            OCR_SPACE_URL,
-            files={"filename": (filename, file_bytes, _ocr_mime_type(filename))},
-            data={
-                "apikey": OCR_SPACE_API_KEY,
-                "language": OCR_SPACE_LANGUAGE,
-                "isOverlayRequired": "false",
-                "scale": "true",
-                "detectOrientation": "true",
-                "OCREngine": "2",
-            },
-            timeout=60,
-        )
-        r.raise_for_status()
-        data = r.json()
-    except requests.RequestException as e:
-        logger.warning("OCR request failed: %s", e)
-        raise RuntimeError("Не удалось распознать документ. Попробуйте позже.") from e
-    except (ValueError, TypeError) as e:
-        logger.warning("OCR parse failed: %s", e)
-        raise RuntimeError("Ошибка при разборе ответа OCR API.") from e
-
-    if data.get("IsErroredOnProcessing"):
-        errors = data.get("ErrorMessage") or data.get("ErrorDetails") or "Ошибка OCR."
-        if isinstance(errors, list):
-            errors = "; ".join(str(x) for x in errors if str(x).strip())
-        error_text = str(errors).strip() or "Ошибка OCR."
-        if "maximum size" in error_text.lower() or "file size" in error_text.lower():
-            raise ValueError("Файл слишком большой для бесплатного OCR (до 1 МБ).")
-        if "page limit" in error_text.lower() or "3 pages" in error_text.lower():
-            raise ValueError("Бесплатный OCR поддерживает PDF только до 3 страниц.")
-        raise RuntimeError(f"OCR API вернул ошибку: {error_text}")
-
-    results = data.get("ParsedResults") or []
-    text_parts: list[str] = []
-    for item in results:
-        if not isinstance(item, dict):
-            continue
-        parsed = _normalize_ocr_text(str(item.get("ParsedText") or ""))
-        if parsed:
-            text_parts.append(parsed)
-    text = "\n\n".join(text_parts).strip()
+    text = _ocr_text_from_pdf_bytes(file_bytes) if ext == ".pdf" else _ocr_text_from_image_bytes(file_bytes)
     if not text:
         raise ValueError("Не удалось распознать текст. Попробуйте более чёткий скан.")
     return text
