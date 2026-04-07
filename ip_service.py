@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Получение информации по IP, доменам, BIN, email и номерам телефонов."""
+"""Получение информации по IP, доменам, BIN, email, username и номерам телефонов."""
 
 import html
 import os
@@ -16,7 +16,7 @@ def _h(val: Any) -> str:
 
 # Разделитель (на всю ширину сообщения в Telegram)
 DIV = "─" * 30
-E_IP, E_DOMAIN, E_BIN, E_PHONE, E_WALLET, E_EMAIL = "📡", "📌", "💳", "📱", "₿", "✉️"
+E_IP, E_DOMAIN, E_BIN, E_PHONE, E_WALLET, E_EMAIL, E_USER = "📡", "📌", "💳", "📱", "₿", "✉️", "👤"
 E_COUNTRY, E_CITY, E_ORG, E_DATE, E_LINK = "🌍", "📍", "🏢", "📅", "🌐"
 E_SECURITY, E_SCHEME, E_TYPE = "🔒", "🏦", "📋"
 E_STAR, E_WARN, E_TIME = "⭐", "⚠️", "🕐"
@@ -234,6 +234,22 @@ def _validate_email(email: str) -> bool:
     )
 
 
+def _validate_username(username: str) -> bool:
+    """Проверка username для OSINT-поиска."""
+    username = username.strip()
+    if username.startswith("@"):
+        username = username[1:]
+    return bool(re.match(r"^[A-Za-z0-9._-]{3,32}$", username))
+
+
+def _normalize_username(username: str) -> str:
+    """Нормализует username."""
+    username = username.strip()
+    if username.startswith("@"):
+        username = username[1:]
+    return username
+
+
 def _normalize_email(email: str) -> str:
     """Нормализует email: local как есть, домен в lowercase."""
     email = email.strip()
@@ -256,8 +272,8 @@ def _normalize_phone(phone: str) -> str:
 
 def detect_lookup_type(text: str) -> tuple[str, str]:
     """
-    Определяет тип запроса: IP, домен, BIN, email, телефон, wallet.
-    Возвращает ("ip"|"domain"|"bin"|"email"|"phone"|"wallet", значение) или ("", "").
+    Определяет тип запроса: IP, домен, BIN, email, username, телефон, wallet.
+    Возвращает ("ip"|"domain"|"bin"|"email"|"user"|"phone"|"wallet", значение) или ("", "").
     """
     text = text.strip()
     parts = text.split()
@@ -271,6 +287,8 @@ def detect_lookup_type(text: str) -> tuple[str, str]:
         return "ip", candidate
     if _validate_wallet(candidate):
         return "wallet", candidate
+    if candidate.startswith("@") and _validate_username(candidate):
+        return "user", _normalize_username(candidate)
     if _validate_email(candidate):
         return "email", _normalize_email(candidate)
     if _validate_domain(candidate):
@@ -1423,6 +1441,77 @@ def get_email_info(email: str) -> str:
         lines.append(f"{E_DATE} <b>Домен создан:</b> {_h(created)}")
     if registrar and registrar != "—":
         lines.append(f"{E_ORG} <b>Регистратор домена:</b> {_h(registrar)}")
+    return "\n".join(lines)
+
+
+USERNAME_CHECK_HEADERS = {"User-Agent": "Mozilla/5.0"}
+USERNAME_TARGETS = (
+    ("GitHub", "https://github.com/{username}"),
+    ("VK", "https://vk.com/{username}"),
+    ("Telegram", "https://t.me/{username}"),
+    ("Hugging Face", "https://huggingface.co/{username}"),
+    ("Kaggle", "https://www.kaggle.com/{username}"),
+    ("Keybase", "https://keybase.io/{username}"),
+)
+
+
+def _manual_username_links(username: str) -> tuple[str, str]:
+    """Ссылки на ручной поиск username в web search."""
+    quoted = requests.utils.quote(f'"{username}"')
+    google = f"https://www.google.com/search?q={quoted}"
+    yandex = f"https://yandex.ru/search/?text={quoted}"
+    return google, yandex
+
+
+def _username_match_exists(label: str, username: str, url: str) -> bool:
+    """Проверяет существование профиля на одной площадке."""
+    try:
+        r = requests.get(url, headers=USERNAME_CHECK_HEADERS, timeout=12, allow_redirects=True)
+    except requests.RequestException as e:
+        logger.warning("username lookup failed for %s (%s): %s", label, username, e)
+        return False
+
+    final_url = (r.url or "").lower()
+    expected = username.lower()
+    if label == "Telegram":
+        return r.status_code == 200 and final_url.startswith(f"https://t.me/{expected}")
+    if label == "VK":
+        return r.status_code == 200 and final_url in (
+            f"https://vk.com/{expected}",
+            f"https://m.vk.com/{expected}",
+        )
+    return r.status_code == 200 and expected in final_url
+
+
+def get_username_info(username: str) -> str:
+    """Username search по открытым площадкам."""
+    username = _normalize_username(username)
+    if not _validate_username(username):
+        return "Неверный формат username. Пример: /user durov или @durov"
+
+    found: list[tuple[str, str]] = []
+    for label, template in USERNAME_TARGETS:
+        url = template.format(username=username)
+        if _username_match_exists(label, username, url):
+            found.append((label, url))
+
+    google_url, yandex_url = _manual_username_links(username)
+    lines = [
+        f"{E_USER} <b>Username search</b>: <code>{_h(username)}</code>",
+        DIV,
+        f"{E_STAR} <b>Проверено площадок:</b> {len(USERNAME_TARGETS)}",
+        f"{E_STAR} <b>Найдено совпадений:</b> {len(found)}",
+    ]
+    if found:
+        lines.append("")
+        lines.append(f"{E_LINK} <b>Найденные профили:</b>")
+        for label, url in found:
+            lines.append(f"• <a href=\"{_h(url)}\">{_h(label)}</a>")
+    else:
+        lines.append("")
+        lines.append("Совпадения на проверенных площадках не найдены.")
+    lines.append("")
+    lines.append(f'{E_LINK} <b>Ручной поиск:</b> <a href="{_h(google_url)}">Google</a> | <a href="{_h(yandex_url)}">Yandex</a>')
     return "\n".join(lines)
 
 
