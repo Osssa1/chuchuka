@@ -42,6 +42,8 @@ WHOISJSON_URL = "https://whoisjson.com/api/v1/whois"
 RDAP_DOMAIN_URL = "https://rdap.org/domain"
 VIEWDNS_WHOIS_URL = "https://viewdns.info/whois/"
 HANDYAPI_BIN_URL = "https://data.handyapi.com/bin"
+# Резервный BIN без ключа: lookup.binlist.net (лимит ~5 запросов/час, см. binlist.net).
+BINLIST_LOOKUP_URL = "https://lookup.binlist.net"
 # Ключи внешних API берём из переменных окружения, чтобы не хранить секреты в репозитории.
 HANDYAPI_KEY = os.environ.get("HANDYAPI_KEY", "")
 WHOISJSON_KEY = os.environ.get("WHOISJSON_KEY", "")
@@ -882,6 +884,95 @@ def _format_country(country_val: Any) -> str:
     return str(country_val).strip() or "—"
 
 
+def _binlist_json_to_internal(raw: dict[str, Any]) -> dict[str, Any]:
+    """Приводит ответ lookup.binlist.net к полям, ожидаемым _format_bin_info."""
+    bank = raw.get("bank") if isinstance(raw.get("bank"), dict) else {}
+    country = raw.get("country") if isinstance(raw.get("country"), dict) else {}
+    scheme = (raw.get("scheme") or "").strip()
+    scheme = scheme.title() if scheme else "—"
+    ctype = (raw.get("type") or "").strip()
+    ctype = ctype.title() if ctype else "—"
+    prepaid = raw.get("prepaid")
+    if prepaid is True:
+        tier = "Prepaid"
+    elif prepaid is False:
+        tier = "—"
+    else:
+        tier = "—"
+    issuer = (bank.get("name") or "").strip() or "—"
+    country_val = (country.get("name") or country.get("alpha2") or "").strip() or "—"
+    return {
+        "scheme": scheme,
+        "type": ctype,
+        "Tier": tier,
+        "Bank": issuer,
+        "Country": country_val,
+    }
+
+
+def _fetch_bin_from_binlist(bin_str: str) -> Optional[dict[str, Any]]:
+    """Резервный BIN через публичный API binlist (без ключа)."""
+    digits = "".join(c for c in bin_str if c.isdigit())
+    if len(digits) < 6:
+        return None
+    query = digits[:8] if len(digits) >= 8 else digits[:6]
+    try:
+        r = requests.get(
+            f"{BINLIST_LOOKUP_URL}/{query}",
+            headers={"Accept": "application/json", "Accept-Version": "3"},
+            timeout=15,
+        )
+        if r.status_code == 404:
+            return None
+        if r.status_code == 429:
+            logger.warning("binlist BIN rate limit (429)")
+            return None
+        r.raise_for_status()
+        raw = r.json()
+        if not isinstance(raw, dict):
+            return None
+        return _binlist_json_to_internal(raw)
+    except requests.RequestException as e:
+        logger.warning("binlist BIN request failed: %s", e)
+        return None
+    except (ValueError, TypeError) as e:
+        logger.warning("binlist BIN parse error: %s", e)
+        return None
+
+
+def _resolve_bin_data(bin_str: str) -> tuple[Optional[dict[str, Any]], str]:
+    """
+    Сначала HandyAPI (если есть ключ), иначе сразу binlist.
+    Возвращает (данные для _format_bin_info, метка источника для справки).
+    """
+    if HANDYAPI_KEY:
+        try:
+            r = requests.get(
+                f"{HANDYAPI_BIN_URL}/{bin_str}",
+                headers={"x-api-key": HANDYAPI_KEY},
+                timeout=15,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, dict):
+                    return data, "https://www.handyapi.com/"
+            if r.status_code == 401:
+                logger.warning("handyapi BIN unauthorized, пробуем binlist")
+            elif r.status_code == 404:
+                pass
+            else:
+                r.raise_for_status()
+        except requests.RequestException as e:
+            logger.warning("handyapi BIN request failed: %s", e)
+        except (ValueError, TypeError) as e:
+            logger.warning("handyapi BIN parse error: %s", e)
+
+    bl = _fetch_bin_from_binlist(bin_str)
+    if bl is not None:
+        return bl, "https://binlist.net/"
+    return None, ""
+
+
 def _format_bin_info(data: dict[str, Any], bin_str: str) -> str:
     """Форматирует ответ HandyAPI BIN в HTML."""
     scheme = _get_nested(data, "Scheme", "scheme", "Brand", "brand") or "—"
@@ -905,38 +996,25 @@ def _format_bin_info(data: dict[str, Any], bin_str: str) -> str:
 
 def get_bin_info(bin_str: str) -> str:
     """
-    Запрашивает информацию по BIN через API HandyAPI (handyapi.com).
-    BIN — первые 6–8 цифр карты. Требуется переменная HANDYAPI_KEY.
+    Запрашивает информацию по BIN: сначала HandyAPI (если задан HANDYAPI_KEY),
+    при отсутствии результата — резерв lookup.binlist.net (без ключа, лимит запросов).
+    BIN — первые 6–8 цифр карты.
     """
     bin_str = bin_str.strip()
     if not _validate_bin(bin_str):
         return "Неверный формат BIN. Укажите 6–8 цифр (например: 535316)."
 
-    if not HANDYAPI_KEY:
-        logger.warning("HANDYAPI_KEY не задан")
-        return "BIN API не настроен. Введите API ключ в ip_service.py (HANDYAPI_KEY)."
-
-    try:
-        headers = {"x-api-key": HANDYAPI_KEY}
-        r = requests.get(
-            f"{HANDYAPI_BIN_URL}/{bin_str}",
-            headers=headers,
-            timeout=15,
+    data, _ = _resolve_bin_data(bin_str)
+    if data is None:
+        if HANDYAPI_KEY:
+            return (
+                "BIN не найден в базе или не удалось получить данные "
+                "(HandyAPI и резервный lookup.binlist.net)."
+            )
+        return (
+            "Не удалось получить данные по BIN. "
+            "Добавьте HANDYAPI_KEY или попробуйте позже (резерв binlist имеет лимит запросов)."
         )
-        r.raise_for_status()
-        data = r.json()
-    except requests.RequestException as e:
-        logger.warning("handyapi BIN request failed: %s", e)
-        if hasattr(e, "response") and e.response is not None:
-            status = getattr(e.response, "status_code", None)
-            if status == 401:
-                return "Неверный API-ключ HandyAPI. Проверьте HANDYAPI_KEY."
-            if status == 404:
-                return "BIN не найден в базе данных."
-        return "Не удалось получить данные по BIN. Попробуйте позже."
-    except (ValueError, KeyError) as e:
-        logger.warning("handyapi BIN parse error: %s", e)
-        return "Ошибка при разборе ответа API. Попробуйте позже."
 
     return _format_bin_info(data, bin_str)
 
@@ -1736,21 +1814,12 @@ def get_spravka_word(
         source_url = result.get("source_name") or result.get("source_ref") or "—"
 
     elif lookup_type == "bin":
-        if not HANDYAPI_KEY:
-            raise ValueError("BIN API не настроен. Укажите HANDYAPI_KEY в ip_service.py")
-        try:
-            r = requests.get(
-                f"{HANDYAPI_BIN_URL}/{value}",
-                headers={"x-api-key": HANDYAPI_KEY},
-                timeout=15,
-            )
-            r.raise_for_status()
-            data = r.json()
-        except Exception:
+        data, bin_source = _resolve_bin_data(value.strip())
+        if not data:
             raise ValueError("Не удалось получить данные по BIN")
         scheme = _get_nested(data, "Scheme", "scheme") or "—"
         card_type = _get_nested(data, "Type", "type") or "—"
-        issuer = _get_nested(data, "Bank", "Issuer") or "—"
+        issuer = _get_nested(data, "Bank", "Issuer", "bank", "issuer") or "—"
         country = _format_country(data.get("Country") or data.get("country"))
         content_lines = [
             f"Схема: {scheme}",
@@ -1758,7 +1827,7 @@ def get_spravka_word(
             f"Банк-эмитент: {issuer}",
             f"Страна: {country}",
         ]
-        source_url = "https://www.handyapi.com/"
+        source_url = bin_source or "—"
 
     elif lookup_type == "phone":
         if not NUMVERIFY_KEY:
