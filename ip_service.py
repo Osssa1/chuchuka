@@ -1986,6 +1986,7 @@ def get_spravka_word(
         "domain": ("доменного имени", value),
         "dns": ("домена", value),
         "bin": ("BIN банковской карты", value),
+        "email": ("адреса электронной почты", value),
         "phone": ("номера телефона", value),
         "wallet": ("криптовалютного адреса", value),
     }
@@ -2054,6 +2055,43 @@ def get_spravka_word(
             f"Страна: {country}",
         ]
         source_url = bin_source or "—"
+
+    elif lookup_type == "email":
+        email = _normalize_email(value)
+        if not _validate_email(email):
+            raise ValueError("Неверный формат email.")
+        local, domain = email.rsplit("@", 1)
+        resolver = _get_dns_resolver()
+        mx_records = _query_dns(domain, "MX", resolver) if resolver is not None else []
+        mx_line = ", ".join(mx_records[:3]) if mx_records else "—"
+        has_spf = _has_prefixed_txt(domain, "v=spf1", resolver)
+        has_dmarc = _has_prefixed_txt(f"_dmarc.{domain}", "v=dmarc1", resolver)
+        provider = _classify_email_provider(domain, mx_records)
+        gravatar_url = _check_gravatar(email)
+        domain_lookup = _get_domain_lookup(domain)
+        created = domain_lookup.get("created") if domain_lookup else "—"
+        registrar = domain_lookup.get("registrar_name") if domain_lookup else "—"
+        disposable = domain.lower() in EMAIL_DISPOSABLE_DOMAINS
+        content_lines = [
+            f"Email: {email}",
+            f"Локальная часть: {local}",
+            f"Домен: {domain}",
+            f"Тип/провайдер: {provider}",
+            f"MX: {mx_line}",
+            f"SPF: {_yes_no(has_spf)}",
+            f"DMARC: {_yes_no(has_dmarc)}",
+            f"Временная почта: {_yes_no(disposable)}",
+            f"Gravatar: {'найден' if gravatar_url else 'не найден'}",
+            f"Домен создан: {created or '—'}",
+            f"Регистратор домена: {registrar or '—'}",
+        ]
+        source_parts = []
+        if domain_lookup:
+            source_parts.append(domain_lookup.get("source_name") or domain_lookup.get("source_ref") or "WHOIS")
+        if gravatar_url:
+            source_parts.append("Gravatar")
+        source_parts.append("DNS (MX/SPF/DMARC)")
+        source_url = ", ".join(part for part in source_parts if part) or "—"
 
     elif lookup_type == "phone":
         if not NUMVERIFY_KEY:

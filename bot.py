@@ -934,7 +934,7 @@ async def spravka_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     rest = query.data[len(SPRAVKA_PREFIX):].strip()
     parts = rest.split(":")
-    if len(parts) >= 2 and parts[0] in ("ip", "domain", "dns", "bin", "phone", "wallet"):
+    if len(parts) >= 2 and parts[0] in ("ip", "domain", "dns", "bin", "email", "phone", "wallet"):
         lookup_type, value = parts[0], ":".join(parts[1:]).strip()
     else:
         lookup_type, value = _spravka_cache.get(parts[0] if parts else "", (None, None))
@@ -1135,7 +1135,11 @@ async def email_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     text = await loop.run_in_executor(None, get_email_info, email)
     if len(text) > 4000:
         text = text[:3997] + "..."
-    await update.message.reply_text(text, parse_mode="HTML")
+    await update.message.reply_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=_spravka_only_keyboard("email", email, context),
+    )
     try:
         await status_msg.delete()
     except Exception:
@@ -1278,8 +1282,6 @@ async def message_ip_or_domain(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup = _domain_result_keyboard(value, context)
     elif lookup_type == "wallet":
         reply_markup = _wallet_result_keyboard(value, context)
-    elif lookup_type == "email":
-        reply_markup = None
     else:
         reply_markup = _spravka_only_keyboard(lookup_type, value, context)
     await update.message.reply_text(
