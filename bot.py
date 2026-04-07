@@ -41,15 +41,18 @@ from ip_service import (
     get_dns_info,
     get_dns_report_file,
     get_bin_info,
+    get_email_info,
     get_phone_info,
     get_wallet_info,
     get_wallet_tx_report_file,
     get_spravka_word,
     detect_lookup_type,
     _validate_domain,
+    _validate_email,
     _validate_phone,
     _validate_wallet,
     _detect_wallet_chains,
+    _normalize_email,
     _normalize_phone,
 )
 
@@ -291,9 +294,10 @@ COMMANDS_TEXT = (
     "• 8.8.8.8 — информация по IP\n"
     "• example.com — информация о домене\n"
     "• 535316 — информация по BIN карты\n"
+    "• user@example.com — email OSINT\n"
     "• 0x... / 1... / T... — криптокошелёк (ETH, BTC, TRON)\n"
     "• +79161234567 — оператор по номеру\n\n"
-    "Команды: /start, /help, /privacy (политика ПД), /ip, /domain, /dns, /bin, /wallet, /phone"
+    "Команды: /start, /help, /privacy (политика ПД), /ip, /domain, /dns, /bin, /email, /wallet, /phone"
 )
 
 
@@ -544,6 +548,7 @@ async def post_init(app: Application) -> None:
             BotCommand("domain", "Поиск по домену"),
             BotCommand("dns", "DNS записи домена"),
             BotCommand("bin", "Поиск по BIN карты"),
+            BotCommand("email", "OSINT по email"),
             BotCommand("wallet", "Криптокошелёк (ETH/BTC/TRON)"),
             BotCommand("phone", "Оператор по номеру"),
         ]
@@ -562,7 +567,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await update.message.reply_text(
         "👋 Привет!\n\n"
-        "Я помогу узнать информацию по IP, доменам, BIN, криптокошелькам и номерам телефонов. "
+        "Я помогу узнать информацию по IP, доменам, BIN, email, криптокошелькам и номерам телефонов. "
         "Просто введи нужные данные в чат или выбери команду из меню.\n\n"
         "Обработка персональных данных: /privacy",
     )
@@ -1116,6 +1121,28 @@ async def bin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 @_allowed_only
+async def email_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """OSINT по email."""
+    if not context.args:
+        await update.message.reply_text("Укажите email: /email user@example.com")
+        return
+    email = _normalize_email("".join(context.args))
+    if not _validate_email(email):
+        await update.message.reply_text("Неверный формат email. Пример: /email user@example.com")
+        return
+    status_msg = await update.message.reply_text("Проверяю информацию по email…")
+    loop = asyncio.get_event_loop()
+    text = await loop.run_in_executor(None, get_email_info, email)
+    if len(text) > 4000:
+        text = text[:3997] + "..."
+    await update.message.reply_text(text, parse_mode="HTML")
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+
+
+@_allowed_only
 async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Поиск по криптокошельку (ETH, BTC, TRON)."""
     if not context.args:
@@ -1227,6 +1254,7 @@ async def message_ip_or_domain(update: Update, context: ContextTypes.DEFAULT_TYP
         "ip": "Проверяю информацию по IP…",
         "domain": "Проверяю информацию по домену…",
         "bin": "Проверяю информацию по BIN…",
+        "email": "Проверяю информацию по email…",
         "wallet": "Проверяю кошелёк…",
         "phone": "Проверяю информацию по номеру…",
     }
@@ -1234,6 +1262,7 @@ async def message_ip_or_domain(update: Update, context: ContextTypes.DEFAULT_TYP
         "ip": get_ip_info,
         "domain": get_domain_info,
         "bin": get_bin_info,
+        "email": get_email_info,
         "wallet": get_wallet_info,
         "phone": get_phone_info,
     }
@@ -1249,6 +1278,8 @@ async def message_ip_or_domain(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup = _domain_result_keyboard(value, context)
     elif lookup_type == "wallet":
         reply_markup = _wallet_result_keyboard(value, context)
+    elif lookup_type == "email":
+        reply_markup = None
     else:
         reply_markup = _spravka_only_keyboard(lookup_type, value, context)
     await update.message.reply_text(
@@ -1290,6 +1321,7 @@ def main() -> None:
     app.add_handler(CommandHandler("domain", domain_command))
     app.add_handler(CommandHandler("dns", dns_command))
     app.add_handler(CommandHandler("bin", bin_command))
+    app.add_handler(CommandHandler("email", email_command))
     app.add_handler(CommandHandler("wallet", wallet_command))
     app.add_handler(CommandHandler("phone", phone_command))
     app.add_handler(

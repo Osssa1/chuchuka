@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Получение информации по IP, доменам, BIN и номерам телефонов."""
+"""Получение информации по IP, доменам, BIN, email и номерам телефонов."""
 
 import html
 import os
@@ -16,7 +16,7 @@ def _h(val: Any) -> str:
 
 # Разделитель (на всю ширину сообщения в Telegram)
 DIV = "─" * 30
-E_IP, E_DOMAIN, E_BIN, E_PHONE, E_WALLET = "📡", "📌", "💳", "📱", "₿"
+E_IP, E_DOMAIN, E_BIN, E_PHONE, E_WALLET, E_EMAIL = "📡", "📌", "💳", "📱", "₿", "✉️"
 E_COUNTRY, E_CITY, E_ORG, E_DATE, E_LINK = "🌍", "📍", "🏢", "📅", "🌐"
 E_SECURITY, E_SCHEME, E_TYPE = "🔒", "🏦", "📋"
 E_STAR, E_WARN, E_TIME = "⭐", "⚠️", "🕐"
@@ -223,6 +223,26 @@ def _validate_phone(phone: str) -> bool:
     return 10 <= len(digits) <= 15
 
 
+def _validate_email(email: str) -> bool:
+    """Проверка формата email."""
+    email = email.strip()
+    return bool(
+        re.match(
+            r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@(?:[A-Za-z0-9-]{1,63}\.)+[A-Za-z]{2,63}$",
+            email,
+        )
+    )
+
+
+def _normalize_email(email: str) -> str:
+    """Нормализует email: local как есть, домен в lowercase."""
+    email = email.strip()
+    if "@" not in email:
+        return email
+    local, domain = email.rsplit("@", 1)
+    return f"{local}@{domain.lower()}"
+
+
 def _normalize_phone(phone: str) -> str:
     """Нормализует номер: оставляет только цифры, добавляет + для международного формата."""
     digits = re.sub(r"\D", "", phone.strip())
@@ -236,8 +256,8 @@ def _normalize_phone(phone: str) -> str:
 
 def detect_lookup_type(text: str) -> tuple[str, str]:
     """
-    Определяет тип запроса: IP, домен, BIN, телефон, wallet.
-    Возвращает ("ip"|"domain"|"bin"|"phone"|"wallet", значение) или ("", "").
+    Определяет тип запроса: IP, домен, BIN, email, телефон, wallet.
+    Возвращает ("ip"|"domain"|"bin"|"email"|"phone"|"wallet", значение) или ("", "").
     """
     text = text.strip()
     parts = text.split()
@@ -251,6 +271,8 @@ def detect_lookup_type(text: str) -> tuple[str, str]:
         return "ip", candidate
     if _validate_wallet(candidate):
         return "wallet", candidate
+    if _validate_email(candidate):
+        return "email", _normalize_email(candidate)
     if _validate_domain(candidate):
         return "domain", candidate
     if _validate_bin(candidate):
@@ -1226,6 +1248,182 @@ def get_phone_info(phone: str) -> str:
         return f"Ошибка API: {info}"
 
     return _format_phone_info(data, normalized)
+
+
+EMAIL_DISPOSABLE_DOMAINS = {
+    "mailinator.com",
+    "guerrillamail.com",
+    "10minutemail.com",
+    "tempmail.com",
+    "temp-mail.org",
+    "yopmail.com",
+    "sharklasers.com",
+}
+
+EMAIL_DOMAIN_LABELS = {
+    "gmail.com": "Gmail",
+    "googlemail.com": "Gmail",
+    "outlook.com": "Outlook",
+    "hotmail.com": "Hotmail",
+    "live.com": "Microsoft account",
+    "msn.com": "MSN / Outlook",
+    "yahoo.com": "Yahoo Mail",
+    "icloud.com": "Apple iCloud Mail",
+    "me.com": "Apple Mail",
+    "proton.me": "Proton Mail",
+    "protonmail.com": "Proton Mail",
+    "mail.ru": "Mail.ru",
+    "bk.ru": "Mail.ru",
+    "inbox.ru": "Mail.ru",
+    "list.ru": "Mail.ru",
+    "yandex.ru": "Yandex Mail",
+    "ya.ru": "Yandex Mail",
+}
+
+EMAIL_MX_LABELS = (
+    ("google.com", "Google Workspace / Gmail"),
+    ("googlemail.com", "Google Workspace / Gmail"),
+    ("outlook.com", "Microsoft 365 / Outlook"),
+    ("protection.outlook.com", "Microsoft 365 / Outlook"),
+    ("yahoodns.net", "Yahoo Mail"),
+    ("icloud.com", "Apple iCloud Mail"),
+    ("mail.icloud.com", "Apple iCloud Mail"),
+    ("zoho.com", "Zoho Mail"),
+    ("protonmail.ch", "Proton Mail"),
+    ("protonmail.net", "Proton Mail"),
+    ("protonmail.com", "Proton Mail"),
+    ("yandex.net", "Yandex Mail"),
+    ("yandex.ru", "Yandex Mail"),
+    ("mail.ru", "Mail.ru"),
+    ("fastmail.com", "Fastmail"),
+)
+
+
+def _get_dns_resolver() -> Any:
+    """Создаёт системный DNS resolver."""
+    if not DNS_AVAILABLE:
+        return None
+    try:
+        return dns.resolver.Resolver()
+    except Exception:
+        return None
+
+
+def _extract_mx_hosts(mx_records: list[str]) -> list[str]:
+    """Извлекает host из строк MX."""
+    hosts = []
+    for item in mx_records:
+        parts = str(item).split()
+        host = parts[-1].strip().lower().rstrip(".") if parts else ""
+        if host:
+            hosts.append(host)
+    return hosts
+
+
+def _classify_email_provider(domain: str, mx_records: list[str]) -> str:
+    """Определяет тип/провайдера почты."""
+    domain = domain.lower()
+    if domain in EMAIL_DISPOSABLE_DOMAINS:
+        return "Временная/одноразовая почта"
+
+    direct = EMAIL_DOMAIN_LABELS.get(domain)
+    if direct:
+        return direct
+
+    for host in _extract_mx_hosts(mx_records):
+        for pattern, label in EMAIL_MX_LABELS:
+            if pattern in host:
+                return label
+
+    if mx_records:
+        return "Кастомная/корпоративная почта"
+    return "Не определено"
+
+
+def _txt_records(domain: str, resolver: Any) -> list[str]:
+    """TXT записи домена."""
+    if resolver is None:
+        return []
+    try:
+        answer = resolver.resolve(domain, "TXT", lifetime=10)
+        result = []
+        for rdata in answer:
+            chunks = getattr(rdata, "strings", None) or []
+            if chunks and isinstance(chunks[0], bytes):
+                result.append(b"".join(chunks).decode("utf-8", errors="replace"))
+            else:
+                result.append(str(rdata))
+        return result
+    except Exception:
+        return []
+
+
+def _has_prefixed_txt(domain: str, prefix: str, resolver: Any) -> bool:
+    """Есть ли TXT запись, начинающаяся с prefix."""
+    for record in _txt_records(domain, resolver):
+        if record.strip().lower().startswith(prefix.lower()):
+            return True
+    return False
+
+
+def _check_gravatar(email: str) -> Optional[str]:
+    """Проверка наличия Gravatar по email."""
+    import hashlib
+
+    mail = email.strip().lower().encode("utf-8")
+    digest = hashlib.md5(mail).hexdigest()
+    url = f"https://www.gravatar.com/avatar/{digest}?d=404&s=200"
+    try:
+        r = requests.get(url, timeout=10, allow_redirects=False)
+        if r.status_code == 200:
+            return url
+        if r.status_code == 404:
+            return None
+    except requests.RequestException as e:
+        logger.warning("gravatar lookup failed for %s: %s", email, e)
+    return None
+
+
+def get_email_info(email: str) -> str:
+    """OSINT по email: базовая валидация, MX, SPF/DMARC, тип почты, Gravatar."""
+    email = _normalize_email(email)
+    if not _validate_email(email):
+        return "Неверный формат email. Пример: user@example.com"
+
+    local, domain = email.rsplit("@", 1)
+    resolver = _get_dns_resolver()
+    mx_records = _query_dns(domain, "MX", resolver) if resolver is not None else []
+    mx_line = ", ".join(mx_records[:3]) if mx_records else "—"
+    has_spf = _has_prefixed_txt(domain, "v=spf1", resolver)
+    has_dmarc = _has_prefixed_txt(f"_dmarc.{domain}", "v=dmarc1", resolver)
+    provider = _classify_email_provider(domain, mx_records)
+    gravatar_url = _check_gravatar(email)
+
+    domain_lookup = _get_domain_lookup(domain)
+    created = domain_lookup.get("created") if domain_lookup else None
+    registrar = domain_lookup.get("registrar_name") if domain_lookup else None
+    disposable = domain.lower() in EMAIL_DISPOSABLE_DOMAINS
+
+    lines = [
+        f"{E_EMAIL} <b>Информация по email</b>: <code>{_h(email)}</code>",
+        DIV,
+        f"{E_TYPE} <b>Локальная часть:</b> {_h(local)}",
+        f"{E_DOMAIN} <b>Домен:</b> {_h(domain)}",
+        f"{E_ORG} <b>Тип/провайдер:</b> {_h(provider)}",
+        f"{E_LINK} <b>MX:</b> {_h(mx_line)}",
+        f"{E_SECURITY} <b>SPF:</b> {_yes_no(has_spf)}",
+        f"{E_SECURITY} <b>DMARC:</b> {_yes_no(has_dmarc)}",
+        f"{E_WARN} <b>Временная почта:</b> {_yes_no(disposable)}",
+    ]
+    if gravatar_url:
+        lines.append(f'{E_STAR} <b>Gravatar:</b> <a href="{_h(gravatar_url)}">найден</a>')
+    else:
+        lines.append(f"{E_STAR} <b>Gravatar:</b> не найден")
+    if created and created != "—":
+        lines.append(f"{E_DATE} <b>Домен создан:</b> {_h(created)}")
+    if registrar and registrar != "—":
+        lines.append(f"{E_ORG} <b>Регистратор домена:</b> {_h(registrar)}")
+    return "\n".join(lines)
 
 
 # ============ Криптокошелёк (ETH, BTC, TRON) ============
