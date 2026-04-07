@@ -5,7 +5,6 @@ import html
 import os
 import re
 import logging
-from io import BytesIO
 from typing import Optional, Any
 
 # Экранирование для HTML (Telegram parse_mode)
@@ -48,8 +47,6 @@ BINLIST_LOOKUP_URL = "https://lookup.binlist.net"
 # Ключи внешних API берём из переменных окружения, чтобы не хранить секреты в репозитории.
 HANDYAPI_KEY = os.environ.get("HANDYAPI_KEY", "")
 WHOISJSON_KEY = os.environ.get("WHOISJSON_KEY", "")
-TESSERACT_CMD = os.environ.get("TESSERACT_CMD", "")
-TESSERACT_LANGUAGE = os.environ.get("TESSERACT_LANGUAGE", "rus+eng")
 NUMVERIFY_URL = "https://apilayer.net/api/validate"
 NUMVERIFY_KEY = os.environ.get("NUMVERIFY_KEY", "")
 # Криптокошелёк: ETH (Etherscan), BTC (BlockCypher), TRON (TronGrid)
@@ -1229,149 +1226,6 @@ def get_phone_info(phone: str) -> str:
         return f"Ошибка API: {info}"
 
     return _format_phone_info(data, normalized)
-
-
-# ============ OCR сканов в Word ============
-
-OCR_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
-OCR_MAX_FILE_SIZE = 10 * 1024 * 1024
-OCR_MAX_PDF_PAGES = 10
-
-
-def _normalize_ocr_text(text: str) -> str:
-    """Чистит лишние переводы строк после OCR."""
-    text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r"[ \t]+\n", "\n", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-
-def _ocr_extension(filename: str) -> str:
-    """Расширение файла для OCR."""
-    _, ext = os.path.splitext((filename or "").strip().lower())
-    return ext
-
-
-def _get_tesseract():
-    """Лениво импортирует и настраивает pytesseract."""
-    try:
-        import pytesseract
-    except ImportError as e:
-        raise RuntimeError(
-            "Не установлен pytesseract. Установите зависимости из requirements.txt."
-        ) from e
-    if TESSERACT_CMD:
-        pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
-    return pytesseract
-
-
-def _ocr_text_from_pil_image(image: Any) -> str:
-    """Распознаёт текст с PIL-изображения локальным Tesseract."""
-    pytesseract = _get_tesseract()
-    try:
-        processed = image.convert("L")
-        text = pytesseract.image_to_string(
-            processed,
-            lang=TESSERACT_LANGUAGE,
-            config="--psm 6",
-        )
-    except pytesseract.pytesseract.TesseractNotFoundError as e:
-        raise RuntimeError(
-            "Не найден бинарник tesseract. Установите tesseract-ocr и язык rus на сервере."
-        ) from e
-    return _normalize_ocr_text(text)
-
-
-def _ocr_text_from_image_bytes(file_bytes: bytes) -> str:
-    """OCR локального изображения."""
-    try:
-        from PIL import Image
-    except ImportError as e:
-        raise RuntimeError(
-            "Не установлен Pillow. Установите зависимости из requirements.txt."
-        ) from e
-    try:
-        with Image.open(BytesIO(file_bytes)) as image:
-            text = _ocr_text_from_pil_image(image)
-    except Exception as e:
-        raise RuntimeError("Не удалось открыть изображение для OCR.") from e
-    return text
-
-
-def _ocr_text_from_pdf_bytes(file_bytes: bytes) -> str:
-    """OCR локального PDF: рендер страниц и распознавание через Tesseract."""
-    try:
-        import pypdfium2 as pdfium
-    except ImportError as e:
-        raise RuntimeError(
-            "Не установлен pypdfium2. Установите зависимости из requirements.txt."
-        ) from e
-
-    try:
-        pdf = pdfium.PdfDocument(file_bytes)
-    except Exception as e:
-        raise RuntimeError("Не удалось открыть PDF для OCR.") from e
-
-    try:
-        page_count = len(pdf)
-        if page_count > OCR_MAX_PDF_PAGES:
-            raise ValueError(f"PDF слишком большой: поддерживается до {OCR_MAX_PDF_PAGES} страниц.")
-        parts: list[str] = []
-        for idx in range(page_count):
-            page = pdf[idx]
-            bitmap = page.render(scale=2)
-            image = bitmap.to_pil()
-            text = _ocr_text_from_pil_image(image)
-            if text:
-                parts.append(text)
-        return "\n\n".join(parts).strip()
-    finally:
-        try:
-            pdf.close()
-        except Exception:
-            pass
-
-
-def extract_text_from_scan(file_bytes: bytes, filename: str) -> str:
-    """
-    Локальный OCR для фото/PDF через Tesseract.
-    Файлы не отправляются во внешние сервисы.
-    """
-    if not file_bytes:
-        raise ValueError("Файл пустой.")
-
-    ext = _ocr_extension(filename)
-    if ext not in OCR_ALLOWED_EXTENSIONS:
-        raise ValueError("Поддерживаются JPG, PNG и PDF.")
-    if len(file_bytes) > OCR_MAX_FILE_SIZE:
-        raise ValueError("Файл слишком большой для локального OCR (до 10 МБ).")
-
-    text = _ocr_text_from_pdf_bytes(file_bytes) if ext == ".pdf" else _ocr_text_from_image_bytes(file_bytes)
-    if not text:
-        raise ValueError("Не удалось распознать текст. Попробуйте более чёткий скан.")
-    return text
-
-
-def get_ocr_word_file(file_bytes: bytes, filename: str) -> tuple[bytes, str, str]:
-    """Преобразует скан в печатный Word-файл и возвращает preview текста."""
-    text = extract_text_from_scan(file_bytes, filename)
-
-    try:
-        from docx import Document
-    except ImportError as e:
-        raise RuntimeError("Установите python-docx: pip install python-docx") from e
-
-    doc = Document()
-    doc.add_heading("Распознанный текст", level=1)
-    for block in text.split("\n\n"):
-        doc.add_paragraph(block)
-
-    buf = BytesIO()
-    doc.save(buf)
-    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", os.path.splitext(filename)[0] or "scan")
-    out_name = f"{safe_name}_ocr.docx"
-    preview = text[:1000]
-    return buf.getvalue(), out_name, preview
 
 
 # ============ Криптокошелёк (ETH, BTC, TRON) ============

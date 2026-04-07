@@ -11,6 +11,3 @@ python-whois==0.9.6
 dnspython>=2.4.0
 python-docx>=1.0.0
 Django>=4.2
-pytesseract>=0.3.10
-Pillow>=10.0.0
-pypdfium2>=4.30.0
