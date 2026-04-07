@@ -5,6 +5,7 @@ import html
 import os
 import re
 import logging
+from io import BytesIO
 from typing import Optional, Any
 
 # Экранирование для HTML (Telegram parse_mode)
@@ -42,11 +43,14 @@ WHOISJSON_URL = "https://whoisjson.com/api/v1/whois"
 RDAP_DOMAIN_URL = "https://rdap.org/domain"
 VIEWDNS_WHOIS_URL = "https://viewdns.info/whois/"
 HANDYAPI_BIN_URL = "https://data.handyapi.com/bin"
+OCR_SPACE_URL = "https://api.ocr.space/parse/image"
 # Резервный BIN без ключа: lookup.binlist.net (лимит ~5 запросов/час, см. binlist.net).
 BINLIST_LOOKUP_URL = "https://lookup.binlist.net"
 # Ключи внешних API берём из переменных окружения, чтобы не хранить секреты в репозитории.
 HANDYAPI_KEY = os.environ.get("HANDYAPI_KEY", "")
 WHOISJSON_KEY = os.environ.get("WHOISJSON_KEY", "")
+OCR_SPACE_API_KEY = os.environ.get("OCR_SPACE_API_KEY", "helloworld")
+OCR_SPACE_LANGUAGE = os.environ.get("OCR_SPACE_LANGUAGE", "rus")
 NUMVERIFY_URL = "https://apilayer.net/api/validate"
 NUMVERIFY_KEY = os.environ.get("NUMVERIFY_KEY", "")
 # Криптокошелёк: ETH (Etherscan), BTC (BlockCypher), TRON (TronGrid)
@@ -884,6 +888,31 @@ def _format_country(country_val: Any) -> str:
     return str(country_val).strip() or "—"
 
 
+def _bin_payload_is_empty(data: dict[str, Any]) -> bool:
+    """
+    True, если в ответе API нет ни одного заполненного поля
+    (только пустые объекты / прочерки). Такое бывает у binlist: HTTP 200 и {}.
+    """
+    scheme = _get_nested(data, "Scheme", "scheme", "Brand", "brand")
+    ctype = _get_nested(data, "Type", "type", "CardType", "cardType")
+    tier = _get_nested(data, "Tier", "tier")
+    issuer = _get_nested(data, "Bank", "bank", "Issuer", "issuer")
+    country_raw = _get_nested(data, "Country", "country", "countryName", "country_name")
+    country = _format_country(country_raw) if country_raw is not None else "—"
+
+    def _meaningful(val: Any) -> bool:
+        if val is None:
+            return False
+        if isinstance(val, dict):
+            return bool(val)
+        if isinstance(val, list):
+            return bool(val)
+        s = str(val).strip()
+        return bool(s and s != "—")
+
+    return not any(_meaningful(x) for x in (scheme, ctype, tier, issuer, country))
+
+
 def _binlist_json_to_internal(raw: dict[str, Any]) -> dict[str, Any]:
     """Приводит ответ lookup.binlist.net к полям, ожидаемым _format_bin_info."""
     bank = raw.get("bank") if isinstance(raw.get("bank"), dict) else {}
@@ -931,7 +960,10 @@ def _fetch_bin_from_binlist(bin_str: str) -> Optional[dict[str, Any]]:
         raw = r.json()
         if not isinstance(raw, dict):
             return None
-        return _binlist_json_to_internal(raw)
+        internal = _binlist_json_to_internal(raw)
+        if _bin_payload_is_empty(internal):
+            return None
+        return internal
     except requests.RequestException as e:
         logger.warning("binlist BIN request failed: %s", e)
         return None
@@ -954,7 +986,7 @@ def _resolve_bin_data(bin_str: str) -> tuple[Optional[dict[str, Any]], str]:
             )
             if r.status_code == 200:
                 data = r.json()
-                if isinstance(data, dict):
+                if isinstance(data, dict) and not _bin_payload_is_empty(data):
                     return data, "https://www.handyapi.com/"
             if r.status_code == 401:
                 logger.warning("handyapi BIN unauthorized, пробуем binlist")
@@ -968,7 +1000,7 @@ def _resolve_bin_data(bin_str: str) -> tuple[Optional[dict[str, Any]], str]:
             logger.warning("handyapi BIN parse error: %s", e)
 
     bl = _fetch_bin_from_binlist(bin_str)
-    if bl is not None:
+    if bl is not None and not _bin_payload_is_empty(bl):
         return bl, "https://binlist.net/"
     return None, ""
 
@@ -1008,12 +1040,12 @@ def get_bin_info(bin_str: str) -> str:
     if data is None:
         if HANDYAPI_KEY:
             return (
-                "BIN не найден в базе или не удалось получить данные "
-                "(HandyAPI и резервный lookup.binlist.net)."
+                "По этому BIN в доступных базах нет сведений о платёжной системе, банке и стране "
+                "(ответ пустой или диапазон неизвестен). Проверьте цифры или попробуйте другой BIN."
             )
         return (
-            "Не удалось получить данные по BIN. "
-            "Добавьте HANDYAPI_KEY или попробуйте позже (резерв binlist имеет лимит запросов)."
+            "По этому BIN не найдено данных в публичной базе (lookup.binlist.net). "
+            "Добавьте HANDYAPI_KEY для расширенного поиска или проверьте номер."
         )
 
     return _format_bin_info(data, bin_str)
@@ -1198,6 +1230,122 @@ def get_phone_info(phone: str) -> str:
         return f"Ошибка API: {info}"
 
     return _format_phone_info(data, normalized)
+
+
+# ============ OCR сканов в Word ============
+
+OCR_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
+OCR_MAX_FILE_SIZE = 1024 * 1024  # бесплатный OCR.Space: до 1 MB
+
+
+def _normalize_ocr_text(text: str) -> str:
+    """Чистит лишние переводы строк после OCR."""
+    text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _ocr_extension(filename: str) -> str:
+    """Расширение файла для OCR."""
+    _, ext = os.path.splitext((filename or "").strip().lower())
+    return ext
+
+
+def _ocr_mime_type(filename: str) -> str:
+    """MIME по имени файла."""
+    ext = _ocr_extension(filename)
+    if ext == ".pdf":
+        return "application/pdf"
+    if ext in (".jpg", ".jpeg"):
+        return "image/jpeg"
+    if ext == ".png":
+        return "image/png"
+    return "application/octet-stream"
+
+
+def extract_text_from_scan(file_bytes: bytes, filename: str) -> str:
+    """
+    OCR для фото/PDF через OCR.Space.
+    Бесплатный тариф: до 1 MB и до 3 страниц PDF.
+    """
+    if not file_bytes:
+        raise ValueError("Файл пустой.")
+
+    ext = _ocr_extension(filename)
+    if ext not in OCR_ALLOWED_EXTENSIONS:
+        raise ValueError("Поддерживаются JPG, PNG и PDF.")
+    if len(file_bytes) > OCR_MAX_FILE_SIZE:
+        raise ValueError("Для бесплатного OCR размер файла должен быть не больше 1 МБ.")
+
+    try:
+        r = requests.post(
+            OCR_SPACE_URL,
+            files={"filename": (filename, file_bytes, _ocr_mime_type(filename))},
+            data={
+                "apikey": OCR_SPACE_API_KEY,
+                "language": OCR_SPACE_LANGUAGE,
+                "isOverlayRequired": "false",
+                "scale": "true",
+                "detectOrientation": "true",
+                "OCREngine": "2",
+            },
+            timeout=60,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except requests.RequestException as e:
+        logger.warning("OCR request failed: %s", e)
+        raise RuntimeError("Не удалось распознать документ. Попробуйте позже.") from e
+    except (ValueError, TypeError) as e:
+        logger.warning("OCR parse failed: %s", e)
+        raise RuntimeError("Ошибка при разборе ответа OCR API.") from e
+
+    if data.get("IsErroredOnProcessing"):
+        errors = data.get("ErrorMessage") or data.get("ErrorDetails") or "Ошибка OCR."
+        if isinstance(errors, list):
+            errors = "; ".join(str(x) for x in errors if str(x).strip())
+        error_text = str(errors).strip() or "Ошибка OCR."
+        if "maximum size" in error_text.lower() or "file size" in error_text.lower():
+            raise ValueError("Файл слишком большой для бесплатного OCR (до 1 МБ).")
+        if "page limit" in error_text.lower() or "3 pages" in error_text.lower():
+            raise ValueError("Бесплатный OCR поддерживает PDF только до 3 страниц.")
+        raise RuntimeError(f"OCR API вернул ошибку: {error_text}")
+
+    results = data.get("ParsedResults") or []
+    text_parts: list[str] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        parsed = _normalize_ocr_text(str(item.get("ParsedText") or ""))
+        if parsed:
+            text_parts.append(parsed)
+    text = "\n\n".join(text_parts).strip()
+    if not text:
+        raise ValueError("Не удалось распознать текст. Попробуйте более чёткий скан.")
+    return text
+
+
+def get_ocr_word_file(file_bytes: bytes, filename: str) -> tuple[bytes, str, str]:
+    """Преобразует скан в печатный Word-файл и возвращает preview текста."""
+    text = extract_text_from_scan(file_bytes, filename)
+
+    try:
+        from docx import Document
+    except ImportError as e:
+        raise RuntimeError("Установите python-docx: pip install python-docx") from e
+
+    doc = Document()
+    doc.add_heading("Распознанный текст", level=1)
+    for block in text.split("\n\n"):
+        doc.add_paragraph(block)
+
+    buf = BytesIO()
+    doc.save(buf)
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", os.path.splitext(filename)[0] or "scan")
+    out_name = f"{safe_name}_ocr.docx"
+    preview = text[:1000]
+    return buf.getvalue(), out_name, preview
 
 
 # ============ Криптокошелёк (ETH, BTC, TRON) ============

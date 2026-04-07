@@ -44,6 +44,7 @@ from ip_service import (
     get_phone_info,
     get_wallet_info,
     get_wallet_tx_report_file,
+    get_ocr_word_file,
     get_spravka_word,
     detect_lookup_type,
     _validate_domain,
@@ -292,8 +293,9 @@ COMMANDS_TEXT = (
     "• example.com — информация о домене\n"
     "• 535316 — информация по BIN карты\n"
     "• 0x... / 1... / T... — криптокошелёк (ETH, BTC, TRON)\n"
-    "• +79161234567 — оператор по номеру\n\n"
-    "Команды: /start, /help, /privacy (политика ПД), /ip, /domain, /dns, /bin, /wallet, /phone"
+    "• +79161234567 — оператор по номеру\n"
+    "• фото/PDF скана — OCR в Word\n\n"
+    "Команды: /start, /help, /privacy (политика ПД), /ip, /domain, /dns, /bin, /wallet, /phone, /ocr"
 )
 
 
@@ -546,6 +548,7 @@ async def post_init(app: Application) -> None:
             BotCommand("bin", "Поиск по BIN карты"),
             BotCommand("wallet", "Криптокошелёк (ETH/BTC/TRON)"),
             BotCommand("phone", "Оператор по номеру"),
+            BotCommand("ocr", "Скан в печатный Word"),
         ]
     )
 
@@ -563,7 +566,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "👋 Привет!\n\n"
         "Я помогу узнать информацию по IP, доменам, BIN, криптокошелькам и номерам телефонов. "
-        "Просто введи нужные данные в чат или выбери команду из меню.\n\n"
+        "Также могу распознать текст с фото или PDF скана и вернуть его в Word.\n\n"
+        "Просто введи нужные данные в чат, отправь скан или выбери команду из меню.\n\n"
         "Обработка персональных данных: /privacy",
     )
     await update.message.reply_text(
@@ -1178,6 +1182,83 @@ async def phone_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 @_allowed_only
+async def ocr_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Подсказка по OCR сканов в Word."""
+    await update.message.reply_text(
+        "Отправьте фото документа или PDF-файл, и я верну печатный Word (.docx) "
+        "с распознанным текстом.\n\n"
+        "Поддерживаются: JPG, PNG, PDF.\n"
+        "Для бесплатного OCR желательно: до 1 МБ и PDF до 3 страниц."
+    )
+
+
+def _is_supported_ocr_document(filename: str, mime_type: str) -> bool:
+    """Поддерживаемые типы файлов для OCR."""
+    name = (filename or "").strip().lower()
+    mime = (mime_type or "").strip().lower()
+    if mime == "application/pdf":
+        return True
+    if mime in ("image/jpeg", "image/png"):
+        return True
+    return name.endswith((".pdf", ".jpg", ".jpeg", ".png"))
+
+
+@_allowed_only
+async def ocr_file_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """OCR для фото и PDF: возвращает Word с печатным текстом."""
+    message = update.message
+    if not message:
+        return
+
+    telegram_file = None
+    filename = ""
+    if message.photo:
+        photo = message.photo[-1]
+        telegram_file = await photo.get_file()
+        filename = f"photo_{photo.file_unique_id}.jpg"
+    elif message.document:
+        document = message.document
+        if not _is_supported_ocr_document(document.file_name or "", document.mime_type or ""):
+            await message.reply_text(
+                "Для OCR отправьте JPG, PNG или PDF-файл."
+            )
+            return
+        telegram_file = await document.get_file()
+        filename = document.file_name or f"document_{document.file_unique_id}.pdf"
+    else:
+        return
+
+    status_msg = await message.reply_text("Распознаю текст и готовлю Word…")
+    try:
+        file_data = await telegram_file.download_as_bytearray()
+        content, out_name, preview = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: get_ocr_word_file(bytes(file_data), filename),
+        )
+        doc = InputFile(BytesIO(content), filename=out_name)
+        await message.reply_document(
+            document=doc,
+            caption=f"📄 OCR готов: {out_name}",
+        )
+        if preview:
+            preview_text = preview if len(preview) <= 1000 else preview[:997] + "..."
+            await message.reply_text(
+                f"Предпросмотр распознанного текста:\n\n{preview_text}",
+            )
+    except ValueError as e:
+        await message.reply_text(str(e))
+    except RuntimeError as e:
+        await message.reply_text(str(e))
+    except Exception as e:
+        logger.warning("ocr failed: %s", e)
+        await message.reply_text("Не удалось распознать документ.")
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+
+
+@_allowed_only
 async def message_ip_or_domain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработка ввода: один IP, домен, BIN, кошелёк или номер — без команд. Либо шаги мастера справки."""
     pending = context.user_data.get(PENDING_SPRAVKA_KEY)
@@ -1292,6 +1373,10 @@ def main() -> None:
     app.add_handler(CommandHandler("bin", bin_command))
     app.add_handler(CommandHandler("wallet", wallet_command))
     app.add_handler(CommandHandler("phone", phone_command))
+    app.add_handler(CommandHandler("ocr", ocr_command))
+    app.add_handler(
+        MessageHandler((filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND, ocr_file_message)
+    )
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, message_ip_or_domain)
     )
