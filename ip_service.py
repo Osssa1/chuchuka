@@ -2,9 +2,12 @@
 """Получение информации по IP, доменам, BIN, email, username и номерам телефонов."""
 
 import html
+import json
 import os
 import re
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Any
 
 # Экранирование для HTML (Telegram parse_mode)
@@ -44,6 +47,7 @@ VIEWDNS_WHOIS_URL = "https://viewdns.info/whois/"
 HANDYAPI_BIN_URL = "https://data.handyapi.com/bin"
 # Резервный BIN без ключа: lookup.binlist.net (лимит ~5 запросов/час, см. binlist.net).
 BINLIST_LOOKUP_URL = "https://lookup.binlist.net"
+WHATSMYNAME_DATA_URL = "https://raw.githubusercontent.com/WebBreacher/WhatsMyName/main/wmn-data.json"
 # Ключи внешних API берём из переменных окружения, чтобы не хранить секреты в репозитории.
 HANDYAPI_KEY = os.environ.get("HANDYAPI_KEY", "")
 WHOISJSON_KEY = os.environ.get("WHOISJSON_KEY", "")
@@ -1510,6 +1514,142 @@ def get_username_info(username: str) -> str:
     else:
         lines.append("")
         lines.append("Совпадения на проверенных площадках не найдены.")
+    lines.append("")
+    lines.append(f'{E_LINK} <b>Ручной поиск:</b> <a href="{_h(google_url)}">Google</a> | <a href="{_h(yandex_url)}">Yandex</a>')
+    return "\n".join(lines)
+
+
+WHATSMYNAME_CACHE_TTL = 6 * 60 * 60
+WHATSMYNAME_REQUEST_TIMEOUT = 8
+WHATSMYNAME_MAX_SITES = 120
+WHATSMYNAME_MAX_WORKERS = 12
+_whatsmyname_cache: dict[str, Any] = {"fetched_at": 0.0, "sites": []}
+
+
+def _load_whatsmyname_sites() -> list[dict[str, Any]]:
+    """Загружает и кэширует список сайтов из датасета WhatsMyName."""
+    now = time.time()
+    cached = _whatsmyname_cache.get("sites") or []
+    fetched_at = float(_whatsmyname_cache.get("fetched_at") or 0.0)
+    if cached and now - fetched_at < WHATSMYNAME_CACHE_TTL:
+        return cached
+
+    try:
+        r = requests.get(
+            WHATSMYNAME_DATA_URL,
+            headers=USERNAME_CHECK_HEADERS,
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except requests.RequestException as e:
+        logger.warning("WhatsMyName dataset request failed: %s", e)
+        return cached
+    except (ValueError, TypeError, json.JSONDecodeError) as e:
+        logger.warning("WhatsMyName dataset parse failed: %s", e)
+        return cached
+
+    sites = []
+    for site in data.get("sites") or []:
+        if not isinstance(site, dict):
+            continue
+        if not site.get("uri_check"):
+            continue
+        cat = str(site.get("cat") or "").strip().lower()
+        if cat in ("xx nsfw xx", "archived"):
+            continue
+        sites.append(site)
+
+    _whatsmyname_cache["sites"] = sites
+    _whatsmyname_cache["fetched_at"] = now
+    return sites
+
+
+def _format_wmn_url(template: str, username: str) -> str:
+    """Подставляет username в шаблон WMN."""
+    return template.replace("{account}", requests.utils.quote(username, safe="._-"))
+
+
+def _wmn_match_site(site: dict[str, Any], username: str) -> Optional[tuple[str, str, str]]:
+    """Проверяет один сайт из WhatsMyName на совпадение username."""
+    uri_check = site.get("uri_check")
+    if not isinstance(uri_check, str) or "{account}" not in uri_check:
+        return None
+
+    check_url = _format_wmn_url(uri_check, username)
+    pretty_url = _format_wmn_url(str(site.get("uri_pretty") or uri_check), username)
+    try:
+        r = requests.get(
+            check_url,
+            headers=USERNAME_CHECK_HEADERS,
+            timeout=WHATSMYNAME_REQUEST_TIMEOUT,
+            allow_redirects=True,
+        )
+    except requests.RequestException:
+        return None
+
+    text = r.text or ""
+    status = r.status_code
+    e_code = site.get("e_code")
+    m_code = site.get("m_code")
+    e_string = site.get("e_string")
+    m_string = site.get("m_string")
+
+    if m_string and str(m_string) in text:
+        return None
+    if m_code is not None and status == m_code and (not e_code or e_code != m_code):
+        return None
+    if e_code is not None and status != e_code:
+        return None
+    if e_string and str(e_string) not in text:
+        return None
+
+    label = str(site.get("name") or pretty_url)
+    category = str(site.get("cat") or "misc")
+    return label, pretty_url, category
+
+
+def get_username_info_extended(username: str) -> str:
+    """Расширенный username search по датасету WhatsMyName."""
+    username = _normalize_username(username)
+    if not _validate_username(username):
+        return "Неверный формат username. Пример: /user durov или @durov"
+
+    sites = _load_whatsmyname_sites()
+    if not sites:
+        return "Не удалось загрузить датасет WhatsMyName. Попробуйте позже."
+
+    checked_sites = sites[:WHATSMYNAME_MAX_SITES]
+    found: list[tuple[str, str, str]] = []
+    with ThreadPoolExecutor(max_workers=WHATSMYNAME_MAX_WORKERS) as executor:
+        futures = [executor.submit(_wmn_match_site, site, username) for site in checked_sites]
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+            except Exception:
+                result = None
+            if result:
+                found.append(result)
+
+    found.sort(key=lambda item: (item[2], item[0].lower()))
+    google_url, yandex_url = _manual_username_links(username)
+    lines = [
+        f"{E_USER} <b>Расширенный поиск username</b>: <code>{_h(username)}</code>",
+        DIV,
+        f"{E_STAR} <b>Источник:</b> WhatsMyName",
+        f"{E_STAR} <b>Проверено площадок:</b> {len(checked_sites)}",
+        f"{E_STAR} <b>Найдено совпадений:</b> {len(found)}",
+    ]
+    if found:
+        lines.append("")
+        lines.append(f"{E_LINK} <b>Найденные профили:</b>")
+        for label, url, category in found[:40]:
+            lines.append(f"• <a href=\"{_h(url)}\">{_h(label)}</a> ({_h(category)})")
+        if len(found) > 40:
+            lines.append(f"• ... и ещё {len(found) - 40}")
+    else:
+        lines.append("")
+        lines.append("Совпадения в расширенном поиске не найдены.")
     lines.append("")
     lines.append(f'{E_LINK} <b>Ручной поиск:</b> <a href="{_h(google_url)}">Google</a> | <a href="{_h(yandex_url)}">Yandex</a>')
     return "\n".join(lines)

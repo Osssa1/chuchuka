@@ -44,6 +44,7 @@ from ip_service import (
     get_email_info,
     get_phone_info,
     get_username_info,
+    get_username_info_extended,
     get_wallet_info,
     get_wallet_tx_report_file,
     get_spravka_word,
@@ -175,6 +176,7 @@ PRIVACY_DELETE_CONFIRM_KEYBOARD = InlineKeyboardMarkup([
 DNS_REPORT_PREFIX = "dns_report:"
 WALLET_TX_PREFIX = "wtx:"
 SPRAVKA_PREFIX = "spravka:"
+USER_EXT_PREFIX = "userext:"
 
 _spravka_cache: dict[str, tuple[str, str]] = {}
 
@@ -263,6 +265,14 @@ def _spravka_only_keyboard(lookup_type: str, value: str, context: "ContextTypes.
     """Клавиатура только с кнопкой Справка."""
     cb = _spravka_cb(lookup_type, value, context)
     return InlineKeyboardMarkup([[InlineKeyboardButton("📄 Справка (Word)", callback_data=cb)]])
+
+
+def _username_result_keyboard(username: str) -> InlineKeyboardMarkup:
+    """Кнопка расширенного поиска username через WhatsMyName."""
+    username = _normalize_username(username)
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("🔎 Расширенный поиск", callback_data=f"{USER_EXT_PREFIX}{username}")]]
+    )
 
 
 # Кэш для TX-отчётов (callback_data лимит 64 байта, длинные адреса не влезают)
@@ -593,6 +603,32 @@ async def show_commands_callback(update: Update, context: ContextTypes.DEFAULT_T
     """Обработка нажатия кнопки «Показать команды» под дисклеймером."""
     await update.callback_query.answer()
     await update.callback_query.message.reply_text(COMMANDS_TEXT)
+
+
+@_allowed_only
+async def username_extended_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Расширенный username search по кнопке под обычным результатом."""
+    query = update.callback_query
+    if not query.data or not query.data.startswith(USER_EXT_PREFIX):
+        return
+    username = _normalize_username(query.data[len(USER_EXT_PREFIX):].strip())
+    if not _validate_username(username):
+        await query.answer("Неверный username", show_alert=True)
+        return
+    await query.answer("Запускаю расширенный поиск…")
+    status_msg = await query.message.reply_text("Проверяю username через WhatsMyName…")
+    try:
+        text = await asyncio.get_event_loop().run_in_executor(None, get_username_info_extended, username)
+        if len(text) > 4000:
+            text = text[:3997] + "..."
+        await query.message.reply_text(text, parse_mode="HTML")
+    except Exception as e:
+        logger.warning("username extended search failed: %s", e)
+        await query.message.reply_text("Не удалось выполнить расширенный поиск username.")
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
 
 
 @_allowed_only(require_consent=False)
@@ -1166,7 +1202,11 @@ async def user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     text = await loop.run_in_executor(None, get_username_info, username)
     if len(text) > 4000:
         text = text[:3997] + "..."
-    await update.message.reply_text(text, parse_mode="HTML")
+    await update.message.reply_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=_username_result_keyboard(username),
+    )
     try:
         await status_msg.delete()
     except Exception:
@@ -1312,7 +1352,7 @@ async def message_ip_or_domain(update: Update, context: ContextTypes.DEFAULT_TYP
     elif lookup_type == "wallet":
         reply_markup = _wallet_result_keyboard(value, context)
     elif lookup_type == "user":
-        reply_markup = None
+        reply_markup = _username_result_keyboard(value)
     else:
         reply_markup = _spravka_only_keyboard(lookup_type, value, context)
     await update.message.reply_text(
@@ -1349,6 +1389,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(dns_report_callback, pattern="^dns_report:"))
     app.add_handler(CallbackQueryHandler(wallet_tx_report_callback, pattern="^wtx:"))
     app.add_handler(CallbackQueryHandler(spravka_callback, pattern="^spravka:"))
+    app.add_handler(CallbackQueryHandler(username_extended_callback, pattern="^userext:"))
     app.add_handler(CallbackQueryHandler(spravka_wizard_callback, pattern="^spravka_wiz:"))
     app.add_handler(CommandHandler("ip", ip_command))
     app.add_handler(CommandHandler("domain", domain_command))
