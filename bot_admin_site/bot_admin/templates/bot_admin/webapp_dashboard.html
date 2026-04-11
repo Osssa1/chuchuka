@@ -23,7 +23,7 @@
     body {
       margin: 0;
       min-height: 100vh;
-      padding: 20px 14px 26px;
+      padding: 12px 12px calc(18px + env(safe-area-inset-bottom));
       font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       background:
         linear-gradient(180deg, rgba(118, 170, 233, 0.18), rgba(255, 255, 255, 0) 180px),
@@ -32,24 +32,25 @@
     }
 
     .shell {
-      width: min(100%, 352px);
+      width: min(100%, 420px);
       margin: 0 auto;
+      min-height: calc(100vh - 12px - (18px + env(safe-area-inset-bottom)));
+      display: flex;
+      flex-direction: column;
     }
 
     .topbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 10px;
+      margin-bottom: 12px;
       padding: 0 4px;
       font-size: 15px;
       font-weight: 600;
+      text-align: center;
     }
 
-    .topbar-side {
-      width: 20px;
-      color: #344054;
-      text-align: center;
+    .content {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
     }
 
     .card {
@@ -110,8 +111,8 @@
       display: flex;
       align-items: center;
       gap: 12px;
-      min-height: 40px;
-      padding: 12px 14px;
+      min-height: 52px;
+      padding: 13px 14px;
       border-radius: 16px;
       background: rgba(255, 255, 255, 0.96);
       border: 1px solid var(--panel-border);
@@ -131,6 +132,16 @@
       color: #475467;
       background: #fff;
       flex: 0 0 auto;
+    }
+
+    .menu-icon svg {
+      width: 14px;
+      height: 14px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
 
     .menu-text {
@@ -154,7 +165,7 @@
       background: rgba(255, 255, 255, 0.92);
       border: 1px solid var(--panel-border);
       box-shadow: 0 10px 28px rgba(15, 23, 42, 0.10);
-      margin-top: 10px;
+      margin-top: auto;
       font-size: 11px;
       text-align: center;
       color: var(--muted);
@@ -176,52 +187,77 @@
 </head>
 <body>
   <div class="shell">
-    <div class="topbar">
-      <div class="topbar-side"><</div>
-      <div>Кабинет следователя</div>
-      <div class="topbar-side">...</div>
-    </div>
+    <div class="topbar">Кабинет следователя</div>
 
-    <div class="card">
-      <h1 class="profile-title">Профиль следователя</h1>
-      <ul class="profile-lines">
-        <li id="profilePosition">Должность</li>
-        <li id="profileUnit">Подразделение</li>
-        <li id="profileRank">Звание</li>
-        <li id="profileName">ФИО</li>
-      </ul>
-      <div class="badge">Синхронизировано с ботом</div>
-      <button class="primary-btn" id="editProfileBtn" type="button">Редактировать профиль</button>
-    </div>
+    <div class="content">
+      <div class="card">
+        <h1 class="profile-title">Профиль следователя</h1>
+        <ul class="profile-lines">
+          <li id="profilePosition">Должность</li>
+          <li id="profileUnit">Подразделение</li>
+          <li id="profileRank">Звание</li>
+          <li id="profileName">ФИО</li>
+        </ul>
+        <div class="badge">Синхронизировано с ботом</div>
+        <button class="primary-btn" id="editProfileBtn" type="button">Редактировать профиль</button>
+      </div>
 
-    <div class="menu-card">
-      <div class="menu-icon">⌂</div>
-      <div class="menu-text">Обучение<small>IP, DNS, BIN, телефоны, криптокошельки</small></div>
-    </div>
-    <div class="menu-card">
-      <div class="menu-icon">◫</div>
-      <div class="menu-text">Методические материалы</div>
-    </div>
-    <div class="menu-card">
-      <div class="menu-icon">◌</div>
-      <div class="menu-text">Мои данные</div>
-    </div>
-    <div class="menu-card">
-      <div class="menu-icon">◍</div>
-      <div class="menu-text">Политика ПД</div>
-    </div>
-    <div class="menu-card">
-      <div class="menu-icon">i</div>
-      <div class="menu-text">Что нового</div>
-    </div>
+      <div class="menu-card">
+        <div class="menu-icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3 19 7v10l-7 4-7-4V7l7-4Z"></path>
+            <path d="M5 7l7 4 7-4"></path>
+            <path d="M12 11v10"></path>
+          </svg>
+        </div>
+        <div class="menu-text">Обучение<small>IP, DNS, BIN, телефоны, криптокошельки</small></div>
+      </div>
+      <div class="menu-card">
+        <div class="menu-icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H20v15.5A1.5 1.5 0 0 0 18.5 18H6.5A2.5 2.5 0 0 0 4 20.5z"></path>
+            <path d="M6.5 4C5.12 4 4 5.12 4 6.5V20.5C4 19.12 5.12 18 6.5 18H20"></path>
+            <path d="M9 8h6"></path>
+          </svg>
+        </div>
+        <div class="menu-text">Методические материалы</div>
+      </div>
+      <div class="menu-card">
+        <div class="menu-icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M16 20H8a4 4 0 0 1 8 0Z"></path>
+            <circle cx="12" cy="9" r="3"></circle>
+          </svg>
+        </div>
+        <div class="menu-text">Мои данные</div>
+      </div>
+      <div class="menu-card">
+        <div class="menu-icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3l7 3v6c0 4.5-2.7 7.8-7 9-4.3-1.2-7-4.5-7-9V6l7-3Z"></path>
+          </svg>
+        </div>
+        <div class="menu-text">Политика ПД</div>
+      </div>
+      <div class="menu-card">
+        <div class="menu-icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"></circle>
+            <path d="M12 10v5"></path>
+            <path d="M12 7.5h.01"></path>
+          </svg>
+        </div>
+        <div class="menu-text">Что нового</div>
+      </div>
 
-    <div class="bottom-tabs">
-      <span class="is-active">Открыть профиль</span>
-      <span>Пройти модуль</span>
-      <span>Мои данные</span>
-    </div>
+      <div class="bottom-tabs">
+        <span class="is-active">Открыть профиль</span>
+        <span>Пройти модуль</span>
+        <span>Мои данные</span>
+      </div>
 
-    <div class="status" id="status"></div>
+      <div class="status" id="status"></div>
+    </div>
   </div>
 
   <script>
