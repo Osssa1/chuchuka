@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Согласие на обработку ПД</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      margin: 0; padding: 12px 14px 24px;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      font-size: 15px; line-height: 1.45;
+      background: var(--tg-theme-bg-color, #fff);
+      color: var(--tg-theme-text-color, #111);
+    }
+    h1 { font-size: 18px; margin: 0 0 10px; }
+    .card {
+      border-radius: 12px; padding: 12px;
+      background: var(--tg-theme-secondary-bg-color, #f3f4f6);
+      margin-bottom: 12px;
+    }
+    pre.policy {
+      white-space: pre-wrap; word-break: break-word;
+      margin: 0; font-size: 13px;
+    }
+    label.row { display: flex; gap: 10px; align-items: flex-start; margin: 12px 0; }
+    .btn {
+      display: block; width: 100%; padding: 12px 14px; border-radius: 10px;
+      border: none; font-size: 16px; cursor: pointer; margin-top: 8px;
+    }
+    .btn-primary { background: #248b3e; color: #fff; }
+    .btn-secondary { background: transparent; color: var(--tg-theme-link-color, #2481cc); border: 1px solid #ccc; }
+    .msg { margin-top: 10px; font-size: 14px; color: #666; }
+    .err { color: #b00020; }
+  </style>
+</head>
+<body>
+  <h1>Обработка персональных данных</h1>
+  <p>Ознакомьтесь с политикой и примите решение о согласии на обработку персональных данных.</p>
+
+  <div class="card">
+    {% if policy_text %}
+    <pre class="policy">{{ policy_text }}</pre>
+    {% else %}
+    <p class="err">Текст политики не найден на сервере (файл POLICY_PERSONAL_DATA.md). Обратитесь к администратору.</p>
+    {% endif %}
+  </div>
+
+  <label class="row">
+    <input type="checkbox" id="read">
+    <span>Я ознакомился(ась) с политикой обработки персональных данных</span>
+  </label>
+
+  <button class="btn btn-primary" id="btnAgree" disabled>Согласен</button>
+  <button class="btn btn-secondary" id="btnDecline">Не согласен</button>
+
+  <div class="msg" id="status"></div>
+
+  <script>
+    const POLICY_VERSION = "{{ policy_version|escapejs }}";
+    const tg = window.Telegram.WebApp;
+    tg.ready();
+    tg.expand();
+
+    const readCb = document.getElementById("read");
+    const btnAgree = document.getElementById("btnAgree");
+    const btnDecline = document.getElementById("btnDecline");
+    const status = document.getElementById("status");
+
+    readCb.addEventListener("change", () => {
+      btnAgree.disabled = !readCb.checked;
+    });
+
+    function apiUrl() {
+      const p = window.location.pathname;
+      if (p.includes("/webapp/consent")) {
+        return window.location.origin + "/api/webapp-consent/";
+      }
+      return "/api/webapp-consent/";
+    }
+
+    btnAgree.addEventListener("click", async () => {
+      status.textContent = "";
+      if (!tg.initData) {
+        status.textContent = "Ошибка: нет данных Telegram (initData). Откройте страницу из бота.";
+        status.className = "msg err";
+        return;
+      }
+      btnAgree.disabled = true;
+      try {
+        const r = await fetch(apiUrl(), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ init_data: tg.initData, version: POLICY_VERSION }),
+        });
+        const j = await r.json();
+        if (!r.ok || !j.ok) {
+          status.textContent = (j && j.error) ? j.error : "Не удалось сохранить согласие.";
+          status.className = "msg err";
+          btnAgree.disabled = false;
+          return;
+        }
+        status.textContent = "Согласие сохранено. Закройте окно и нажмите /start в боте.";
+        tg.close();
+      } catch (e) {
+        status.textContent = "Ошибка сети при сохранении согласия.";
+        status.className = "msg err";
+        btnAgree.disabled = false;
+      }
+    });
+
+    btnDecline.addEventListener("click", () => {
+      status.textContent = "Без согласия использование бота невозможно. Закройте окно.";
+      status.className = "msg";
+      try { tg.close(); } catch (e) {}
+    });
+  </script>
+</body>
+</html>

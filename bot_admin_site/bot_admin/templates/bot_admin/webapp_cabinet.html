@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Кабинет пользователя</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      margin: 0;
+      padding: 12px 14px 24px;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      font-size: 15px;
+      line-height: 1.45;
+      background: var(--tg-theme-bg-color, #fff);
+      color: var(--tg-theme-text-color, #111);
+    }
+    h1, h2 { margin: 0 0 10px; }
+    h1 { font-size: 20px; }
+    h2 { font-size: 16px; }
+    p { margin: 0 0 12px; }
+    .card {
+      border-radius: 12px;
+      padding: 12px;
+      background: var(--tg-theme-secondary-bg-color, #f3f4f6);
+      margin-bottom: 12px;
+    }
+    .grid {
+      display: grid;
+      gap: 10px;
+    }
+    .row {
+      display: grid;
+      gap: 4px;
+    }
+    .label {
+      font-size: 13px;
+      color: var(--tg-theme-hint-color, #666);
+    }
+    .value {
+      font-size: 15px;
+      word-break: break-word;
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid #ccc;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 15px;
+      background: var(--tg-theme-bg-color, #fff);
+      color: var(--tg-theme-text-color, #111);
+    }
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: none;
+      font-size: 16px;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+    .btn-primary {
+      background: #248b3e;
+      color: #fff;
+    }
+    .msg {
+      margin-top: 10px;
+      font-size: 14px;
+      color: #666;
+    }
+    .err {
+      color: #b00020;
+    }
+  </style>
+</head>
+<body>
+  <h1>Кабинет</h1>
+  <p>Данные загружаются из Django и сохраняются обратно через API. Локально mini app ничего не хранит.</p>
+
+  <div class="card">
+    <h2>Учетная запись</h2>
+    <div class="grid">
+      <div class="row">
+        <div class="label">Telegram username</div>
+        <div class="value" id="accountUsername">-</div>
+      </div>
+      <div class="row">
+        <div class="label">ФИО из админки</div>
+        <div class="value" id="accountFio">-</div>
+      </div>
+      <div class="row">
+        <div class="label">Согласие на ПД</div>
+        <div class="value" id="accountConsent">-</div>
+      </div>
+      <div class="row">
+        <div class="label">Обновлено в админке</div>
+        <div class="value" id="accountUpdated">-</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Профиль для справки</h2>
+    <div class="grid">
+      <label class="row">
+        <span class="label">Должность</span>
+        <input id="position" maxlength="255" placeholder="Например: старший инспектор">
+      </label>
+      <label class="row">
+        <span class="label">Подразделение</span>
+        <input id="unit" maxlength="255" placeholder="Например: отдел аналитики">
+      </label>
+      <label class="row">
+        <span class="label">Специальное звание</span>
+        <input id="rank" maxlength="255" placeholder="Например: капитан">
+      </label>
+      <label class="row">
+        <span class="label">ФИО для подписи</span>
+        <input id="signatureName" maxlength="255" placeholder="Например: И.И.Иванов">
+      </label>
+    </div>
+    <button class="btn btn-primary" id="btnSave">Сохранить</button>
+    <div class="msg" id="status"></div>
+  </div>
+
+  <script>
+    const tg = window.Telegram.WebApp;
+    tg.ready();
+    tg.expand();
+
+    const statusEl = document.getElementById("status");
+    const btnSave = document.getElementById("btnSave");
+
+    function apiUrl() {
+      return window.location.origin + "/api/webapp-profile/";
+    }
+
+    function setStatus(text, isError) {
+      statusEl.textContent = text || "";
+      statusEl.className = isError ? "msg err" : "msg";
+    }
+
+    function fmtDate(value) {
+      if (!value) {
+        return "-";
+      }
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) {
+        return value;
+      }
+      return date.toLocaleString("ru-RU");
+    }
+
+    function fillAccount(account) {
+      document.getElementById("accountUsername").textContent = account.telegram_username || "-";
+      document.getElementById("accountFio").textContent = account.fio || "-";
+      document.getElementById("accountConsent").textContent = account.consent_at
+        ? "Принято (" + fmtDate(account.consent_at) + ")"
+        : "Не принято";
+      document.getElementById("accountUpdated").textContent = fmtDate(account.updated_at);
+    }
+
+    function fillProfile(profile) {
+      const data = profile || {};
+      document.getElementById("position").value = data.position || "";
+      document.getElementById("unit").value = data.unit || "";
+      document.getElementById("rank").value = data.rank || "";
+      document.getElementById("signatureName").value = data.signature_name || "";
+    }
+
+    async function loadProfile() {
+      if (!tg.initData) {
+        setStatus("Ошибка: нет данных Telegram. Откройте мини-приложение из бота.", true);
+        btnSave.disabled = true;
+        return;
+      }
+      setStatus("Загрузка данных...", false);
+      try {
+        const response = await fetch(apiUrl(), {
+          headers: {
+            "X-Telegram-Init-Data": tg.initData
+          }
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          setStatus((data && data.error) ? data.error : "Не удалось загрузить кабинет.", true);
+          btnSave.disabled = true;
+          return;
+        }
+        fillAccount(data.account || {});
+        fillProfile(data.profile);
+        setStatus("Данные загружены.", false);
+      } catch (error) {
+        setStatus("Ошибка сети при загрузке данных.", true);
+        btnSave.disabled = true;
+      }
+    }
+
+    btnSave.addEventListener("click", async () => {
+      if (!tg.initData) {
+        setStatus("Ошибка: нет данных Telegram. Откройте мини-приложение из бота.", true);
+        return;
+      }
+      btnSave.disabled = true;
+      setStatus("Сохраняю...", false);
+      try {
+        const response = await fetch(apiUrl(), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            init_data: tg.initData,
+            position: document.getElementById("position").value,
+            unit: document.getElementById("unit").value,
+            rank: document.getElementById("rank").value,
+            signature_name: document.getElementById("signatureName").value
+          })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          setStatus((data && data.error) ? data.error : "Не удалось сохранить профиль.", true);
+          btnSave.disabled = false;
+          return;
+        }
+        fillAccount(data.account || {});
+        fillProfile(data.profile);
+        setStatus("Профиль сохранен.", false);
+      } catch (error) {
+        setStatus("Ошибка сети при сохранении профиля.", true);
+      }
+      btnSave.disabled = false;
+    });
+
+    loadProfile();
+  </script>
+</body>
+</html>

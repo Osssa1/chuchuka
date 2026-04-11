@@ -1,0 +1,28 @@
+# Установка (Linux, systemd):
+# 1) sudo mkdir -p /etc/systemd/system
+# 2) sudo cp xseo-django.service.example /etc/systemd/system/xseo-django.service
+# 3) Отредактируйте пути User, WorkingDirectory, EnvironmentFile, ExecStart
+# 4) sudo mkdir -p /run/gunicorn && sudo chown www-data:www-data /run/gunicorn
+#    (или задайте RuntimeDirectory=gunicorn и пользователя с правом на каталог сокета)
+# 5) sudo systemctl daemon-reload && sudo systemctl enable --now xseo-django
+
+[Unit]
+Description=xseo_ip_bot Django (Gunicorn, API + Web App согласия)
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+RuntimeDirectory=gunicorn
+WorkingDirectory=/opt/xseo_ip_bot/bot_admin_site
+EnvironmentFile=-/opt/xseo_ip_bot/deploy/production.env
+ExecStart=/opt/xseo_ip_bot/venv/bin/gunicorn \
+  --workers 3 \
+  --timeout 60 \
+  --bind unix:/run/gunicorn/xseo_ip_bot.sock \
+  bot_admin_site.wsgi:application
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -4,11 +4,17 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+def _split_env_list(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "change-me-in-production-bot-admin")
 
 DEBUG = os.environ.get("DJANGO_DEBUG", "True").lower() in ("1", "true", "yes")
 
-ALLOWED_HOSTS = ["*"] if DEBUG else os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+ALLOWED_HOSTS = ["*"] if DEBUG else _split_env_list(os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1"))
+CSRF_TRUSTED_ORIGINS = _split_env_list(os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", ""))
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -35,7 +41,7 @@ ROOT_URLCONF = "bot_admin_site.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [BASE_DIR / "bot_admin" / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [

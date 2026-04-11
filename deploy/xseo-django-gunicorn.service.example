@@ -1,0 +1,27 @@
+# Скопируйте в /etc/systemd/system/xseo-django-gunicorn.service
+# Замените: User, Group, WorkingDirectory, paths к venv и сокету, EnvironmentFile.
+
+[Unit]
+Description=xseo_ip_bot Django (Gunicorn)
+After=network.target
+
+[Service]
+Type=notify
+User=www-data
+Group=www-data
+RuntimeDirectory=gunicorn
+WorkingDirectory=/opt/xseo_ip_bot/bot_admin_site
+EnvironmentFile=/etc/xseo/environment
+ExecStart=/opt/xseo_ip_bot/venv/bin/gunicorn \
+  --bind unix:/run/gunicorn/xseo.sock \
+  --workers 3 \
+  --timeout 60 \
+  bot_admin_site.wsgi:application
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=5
+PrivateTmp=true
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

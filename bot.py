@@ -23,7 +23,7 @@ ALLOWED_USER_IDS: list[int] = [
 BOT_ALLOWED_LIST_URL: str = os.environ.get("BOT_ALLOWED_LIST_URL", "http://127.0.0.1:8000/api/allowed-ids/")
 
 import requests
-from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, WebAppInfo
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -329,6 +329,42 @@ def _get_api_base() -> str:
     return BOT_ALLOWED_LIST_URL.rstrip("/").rsplit("/", 1)[0] + "/"
 
 
+def _webapp_base_url() -> str:
+    """
+    Базовый HTTPS-URL mini app.
+    Строится из BOT_ALLOWED_LIST_URL: .../api/allowed-ids/ -> .../
+    Для Telegram Web App нужен HTTPS; при http:// возвращает пустую строку.
+    """
+    u = (BOT_ALLOWED_LIST_URL or "").strip()
+    if not u.lower().startswith("https://"):
+        return ""
+    if "/api/" not in u:
+        return ""
+    return u.split("/api/", 1)[0].rstrip("/") + "/"
+
+
+def _consent_miniapp_url() -> str:
+    """HTTPS-URL страницы согласия в mini app."""
+    base = _webapp_base_url()
+    return base + "webapp/consent/" if base else ""
+
+
+def _cabinet_miniapp_url() -> str:
+    """HTTPS-URL страницы кабинета в mini app."""
+    base = _webapp_base_url()
+    return base + "webapp/cabinet/" if base else ""
+
+
+def _cabinet_webapp_keyboard() -> Optional[InlineKeyboardMarkup]:
+    """Кнопка открытия кабинета, если mini app доступен по HTTPS."""
+    cabinet = _cabinet_miniapp_url()
+    if not cabinet:
+        return None
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Открыть кабинет", web_app=WebAppInfo(url=cabinet))]]
+    )
+
+
 def _post_consent_sync(telegram_id: int, version: str = "1.0") -> bool:
     """Фиксация согласия на обработку ПД в Django. Возвращает True при успехе."""
     base = _get_api_base()
@@ -505,10 +541,16 @@ async def _check_allowed(
             pass
         return False
     if require_consent and user.id in _get_consent_required_ids(context):
-        msg = (
-            "Для использования бота необходимо принять политику обработки персональных данных. "
-            "Нажмите /start."
-        )
+        if _consent_miniapp_url():
+            msg = (
+                "Для использования бота необходимо принять политику обработки персональных данных. "
+                "Нажмите /start и откройте окно политики по кнопке в сообщении бота."
+            )
+        else:
+            msg = (
+                "Для использования бота необходимо принять политику обработки персональных данных. "
+                "Нажмите /start."
+            )
         try:
             if update.callback_query:
                 await update.callback_query.answer(msg, show_alert=True)
@@ -574,17 +616,40 @@ async def post_init(app: Application) -> None:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if user and user.id in _get_consent_required_ids(context):
-        await update.message.reply_text(
-            FULL_POLICY_FOR_TELEGRAM,
-            parse_mode="HTML",
-            reply_markup=CONSENT_KEYBOARD,
-        )
+        mini = _consent_miniapp_url()
+        if mini:
+            kb = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "Открыть политику и дать согласие",
+                            web_app=WebAppInfo(url=mini),
+                        )
+                    ]
+                ]
+            )
+            await update.message.reply_text(
+                "Для продолжения работы с ботом необходимо согласие на обработку персональных данных.\n\n"
+                "Нажмите кнопку ниже — откроется окно с полным текстом политики. "
+                "После нажатия «Согласен» вернитесь в чат и снова отправьте /start.",
+                reply_markup=kb,
+            )
+        else:
+            await update.message.reply_text(
+                FULL_POLICY_FOR_TELEGRAM,
+                parse_mode="HTML",
+                reply_markup=CONSENT_KEYBOARD,
+            )
         return
+    cabinet_kb = _cabinet_webapp_keyboard()
+    cabinet_hint = "\nКабинет и профиль для справки можно открыть кнопкой ниже." if cabinet_kb else ""
     await update.message.reply_text(
         "👋 Привет!\n\n"
         "Я помогу узнать информацию по IP, доменам, BIN, email, username, криптокошелькам и номерам телефонов. "
         "Просто введи нужные данные в чат или выбери команду из меню.\n\n"
-        "Обработка персональных данных: /privacy",
+        "Обработка персональных данных: /privacy"
+        + cabinet_hint,
+        reply_markup=cabinet_kb,
     )
     await update.message.reply_text(
         DISCLAIMER_TEXT,

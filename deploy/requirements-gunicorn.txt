@@ -1,0 +1,3 @@
+# Установка рядом с основным requirements.txt:
+#   pip install -r requirements.txt -r deploy/requirements-gunicorn.txt
+gunicorn>=22.0,<24

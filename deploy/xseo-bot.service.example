@@ -1,0 +1,19 @@
+# Скопируйте в /etc/systemd/system/xseo-bot.service
+# Замените: User, WorkingDirectory, путь к venv и к bot.py, EnvironmentFile.
+
+[Unit]
+Description=xseo_ip_bot Telegram bot
+After=network.target xseo-django-gunicorn.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/xseo_ip_bot
+EnvironmentFile=/etc/xseo/environment
+ExecStart=/opt/xseo_ip_bot/venv/bin/python /opt/xseo_ip_bot/bot.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
