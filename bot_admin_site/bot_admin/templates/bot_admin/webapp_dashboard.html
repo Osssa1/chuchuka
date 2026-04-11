@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Кабинет следователя</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --panel-bg: rgba(255, 255, 255, 0.96);
+      --panel-border: rgba(15, 23, 42, 0.08);
+      --panel-shadow: 0 18px 42px rgba(15, 23, 42, 0.16);
+      --muted: #667085;
+      --accent: #4d88d1;
+      --badge-bg: #e1f2f4;
+      --badge-text: #4d8a91;
+      --bg: #eef4fb;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      padding: 20px 14px 26px;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background:
+        linear-gradient(180deg, rgba(118, 170, 233, 0.18), rgba(255, 255, 255, 0) 180px),
+        var(--bg);
+      color: var(--tg-theme-text-color, #101828);
+    }
+
+    .shell {
+      width: min(100%, 352px);
+      margin: 0 auto;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      padding: 0 4px;
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .topbar-side {
+      width: 20px;
+      color: #344054;
+      text-align: center;
+    }
+
+    .card {
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      box-shadow: var(--panel-shadow);
+      border-radius: 18px;
+      padding: 14px 14px 12px;
+      backdrop-filter: blur(8px);
+      margin-bottom: 10px;
+    }
+
+    .profile-title {
+      margin: 0 0 8px;
+      font-size: 16px;
+      font-weight: 800;
+    }
+
+    .profile-lines {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .profile-lines li + li {
+      margin-top: 2px;
+    }
+
+    .badge {
+      display: inline-block;
+      margin-top: 10px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: var(--badge-bg);
+      color: var(--badge-text);
+      font-size: 11px;
+      line-height: 1;
+      font-weight: 600;
+    }
+
+    .primary-btn {
+      display: block;
+      width: 100%;
+      margin-top: 10px;
+      border: none;
+      border-radius: 12px;
+      background: linear-gradient(180deg, #5a96e1, #3f78bf);
+      color: #fff;
+      padding: 11px 12px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .menu-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 40px;
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.96);
+      border: 1px solid var(--panel-border);
+      box-shadow: 0 10px 28px rgba(15, 23, 42, 0.10);
+      margin-bottom: 8px;
+    }
+
+    .menu-icon {
+      width: 22px;
+      height: 22px;
+      border-radius: 8px;
+      border: 1px solid rgba(15, 23, 42, 0.10);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      color: #475467;
+      background: #fff;
+      flex: 0 0 auto;
+    }
+
+    .menu-text {
+      font-size: 14px;
+      line-height: 1.25;
+    }
+
+    .menu-text small {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    .bottom-tabs {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+      padding: 8px 10px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.92);
+      border: 1px solid var(--panel-border);
+      box-shadow: 0 10px 28px rgba(15, 23, 42, 0.10);
+      margin-top: 10px;
+      font-size: 11px;
+      text-align: center;
+      color: var(--muted);
+    }
+
+    .bottom-tabs span.is-active {
+      color: #101828;
+      font-weight: 600;
+    }
+
+    .status {
+      min-height: 18px;
+      margin: 8px 2px 0;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <div class="topbar-side"><</div>
+      <div>Кабинет следователя</div>
+      <div class="topbar-side">...</div>
+    </div>
+
+    <div class="card">
+      <h1 class="profile-title">Профиль следователя</h1>
+      <ul class="profile-lines">
+        <li id="profilePosition">Должность</li>
+        <li id="profileUnit">Подразделение</li>
+        <li id="profileRank">Звание</li>
+        <li id="profileName">ФИО</li>
+      </ul>
+      <div class="badge">Синхронизировано с ботом</div>
+      <button class="primary-btn" id="editProfileBtn" type="button">Редактировать профиль</button>
+    </div>
+
+    <div class="menu-card">
+      <div class="menu-icon">⌂</div>
+      <div class="menu-text">Обучение<small>IP, DNS, BIN, телефоны, криптокошельки</small></div>
+    </div>
+    <div class="menu-card">
+      <div class="menu-icon">◫</div>
+      <div class="menu-text">Методические материалы</div>
+    </div>
+    <div class="menu-card">
+      <div class="menu-icon">◌</div>
+      <div class="menu-text">Мои данные</div>
+    </div>
+    <div class="menu-card">
+      <div class="menu-icon">◍</div>
+      <div class="menu-text">Политика ПД</div>
+    </div>
+    <div class="menu-card">
+      <div class="menu-icon">i</div>
+      <div class="menu-text">Что нового</div>
+    </div>
+
+    <div class="bottom-tabs">
+      <span class="is-active">Открыть профиль</span>
+      <span>Пройти модуль</span>
+      <span>Мои данные</span>
+    </div>
+
+    <div class="status" id="status"></div>
+  </div>
+
+  <script>
+    const tg = window.Telegram.WebApp;
+    tg.ready();
+    tg.expand();
+
+    const statusEl = document.getElementById("status");
+    const editProfileBtn = document.getElementById("editProfileBtn");
+
+    function profileApiUrl() {
+      return window.location.origin + "/api/webapp-profile/";
+    }
+
+    function profileEditUrl() {
+      return window.location.origin + "/webapp/cabinet/";
+    }
+
+    function setStatus(text, isError) {
+      statusEl.textContent = text || "";
+      statusEl.style.color = isError ? "#b42318" : "";
+    }
+
+    function fillProfile(profile) {
+      const data = profile || {};
+      document.getElementById("profilePosition").textContent = data.position || "Должность";
+      document.getElementById("profileUnit").textContent = data.unit || "Подразделение";
+      document.getElementById("profileRank").textContent = data.rank || "Звание";
+      document.getElementById("profileName").textContent = data.signature_name || "ФИО";
+    }
+
+    async function loadDashboard() {
+      if (!tg.initData) {
+        setStatus("Ошибка: нет данных Telegram. Откройте мини-приложение из бота.", true);
+        return;
+      }
+      setStatus("Загрузка кабинета...", false);
+      try {
+        const response = await fetch(profileApiUrl(), {
+          headers: {
+            "X-Telegram-Init-Data": tg.initData
+          }
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          setStatus((data && data.error) ? data.error : "Не удалось загрузить кабинет.", true);
+          return;
+        }
+        fillProfile(data.profile);
+        setStatus("", false);
+      } catch (error) {
+        setStatus("Ошибка сети при загрузке кабинета.", true);
+      }
+    }
+
+    editProfileBtn.addEventListener("click", () => {
+      window.location.href = profileEditUrl();
+    });
+
+    loadDashboard();
+  </script>
+</body>
+</html>

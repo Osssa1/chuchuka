@@ -147,6 +147,12 @@ def webapp_cabinet_page(request):
     return render(request, "bot_admin/webapp_cabinet.html")
 
 
+@require_http_methods(["GET"])
+def webapp_dashboard_page(request):
+    """Главный экран mini app после заполнения профиля."""
+    return render(request, "bot_admin/webapp_dashboard.html")
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def webapp_consent_api(request):

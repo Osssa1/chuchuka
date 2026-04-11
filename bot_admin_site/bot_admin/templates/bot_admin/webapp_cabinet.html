@@ -330,6 +330,10 @@
       return window.location.origin + "/api/webapp-profile/";
     }
 
+    function dashboardUrl() {
+      return window.location.origin + "/webapp/dashboard/";
+    }
+
     function setStatus(text, isError) {
       statusEl.textContent = text || "";
       statusEl.className = isError ? "msg err" : "msg";
@@ -466,7 +470,11 @@
         }
         fillAccount(data.account || {});
         fillProfile(data.profile);
-        setStatus("Профиль сохранен. Можно продолжить работу в боте.", false);
+        setStatus("Профиль сохранен. Открываем кабинет.", false);
+        setTimeout(() => {
+          window.location.href = dashboardUrl();
+        }, 350);
+        return;
       } catch (error) {
         setStatus("Ошибка сети при сохранении профиля.", true);
       }
