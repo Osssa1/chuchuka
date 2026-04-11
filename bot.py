@@ -359,9 +359,9 @@ def _consent_miniapp_url() -> str:
 
 
 def _cabinet_miniapp_url() -> str:
-    """HTTPS-URL страницы кабинета в mini app."""
+    """HTTPS-URL главного экрана кабинета в mini app."""
     base = _webapp_base_url()
-    return base + "webapp/cabinet/" if base else ""
+    return base + "webapp/dashboard/" if base else ""
 
 
 def _cabinet_webapp_keyboard() -> Optional[InlineKeyboardMarkup]:
