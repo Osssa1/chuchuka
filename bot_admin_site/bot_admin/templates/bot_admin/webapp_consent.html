@@ -3,59 +3,189 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Согласие на обработку ПД</title>
+  <title>Обработка персональных данных</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
-    :root { color-scheme: light dark; }
+    :root {
+      color-scheme: light dark;
+      --panel-bg: rgba(255, 255, 255, 0.95);
+      --panel-border: rgba(15, 23, 42, 0.08);
+      --panel-shadow: 0 14px 34px rgba(15, 23, 42, 0.14);
+      --accent: #63c766;
+      --accent-dark: #46b753;
+      --outline: #19384b;
+      --muted: #5f6d7a;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
     body {
-      margin: 0; padding: 12px 14px 24px;
+      margin: 0;
+      min-height: 100vh;
+      padding: 18px 14px 26px;
       font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-      font-size: 15px; line-height: 1.45;
-      background: var(--tg-theme-bg-color, #fff);
-      color: var(--tg-theme-text-color, #111);
+      font-size: 15px;
+      line-height: 1.4;
+      color: var(--tg-theme-text-color, #111827);
+      background:
+        linear-gradient(180deg, rgba(118, 170, 233, 0.18), rgba(255, 255, 255, 0) 160px),
+        var(--tg-theme-secondary-bg-color, #eef4fb);
     }
-    h1 { font-size: 18px; margin: 0 0 10px; }
-    .card {
-      border-radius: 12px; padding: 12px;
-      background: var(--tg-theme-secondary-bg-color, #f3f4f6);
-      margin-bottom: 12px;
+
+    .shell {
+      width: min(100%, 360px);
+      margin: 0 auto;
     }
-    pre.policy {
-      white-space: pre-wrap; word-break: break-word;
-      margin: 0; font-size: 13px;
+
+    .panel {
+      border-radius: 22px;
+      padding: 18px 16px 14px;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      box-shadow: var(--panel-shadow);
+      backdrop-filter: blur(8px);
     }
-    label.row { display: flex; gap: 10px; align-items: flex-start; margin: 12px 0; }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: 20px;
+      line-height: 1.2;
+      font-weight: 700;
+    }
+
+    .intro {
+      margin: 0 0 14px;
+      color: var(--tg-theme-text-color, #1f2937);
+    }
+
+    .policy-box {
+      max-height: 332px;
+      overflow-y: auto;
+      border-radius: 16px;
+      padding: 14px 14px 10px;
+      background: #fff;
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+    }
+
+    .policy-box h2 {
+      margin: 0 0 6px;
+      font-size: 14px;
+      line-height: 1.3;
+      font-weight: 800;
+    }
+
+    .policy-box p,
+    .policy-box ul {
+      margin: 0 0 10px;
+      font-size: 13px;
+      line-height: 1.38;
+    }
+
+    .policy-box ul {
+      padding-left: 18px;
+    }
+
+    .policy-box li + li {
+      margin-top: 5px;
+    }
+
+    .policy-note {
+      margin: 6px 0 0;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin: 14px 0 10px;
+      font-size: 14px;
+    }
+
+    .checkbox-row input {
+      width: 18px;
+      height: 18px;
+      margin: 2px 0 0;
+      accent-color: var(--accent-dark);
+      flex: 0 0 auto;
+    }
+
     .btn {
-      display: block; width: 100%; padding: 12px 14px; border-radius: 10px;
-      border: none; font-size: 16px; cursor: pointer; margin-top: 8px;
+      display: block;
+      width: 100%;
+      border-radius: 14px;
+      padding: 13px 14px;
+      margin-top: 10px;
+      border: 1px solid transparent;
+      font-size: 15px;
+      line-height: 1.1;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s ease, transform 0.15s ease;
     }
-    .btn-primary { background: #248b3e; color: #fff; }
-    .btn-secondary { background: transparent; color: var(--tg-theme-link-color, #2481cc); border: 1px solid #ccc; }
-    .msg { margin-top: 10px; font-size: 14px; color: #666; }
-    .err { color: #b00020; }
+
+    .btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .btn-primary {
+      background: linear-gradient(180deg, #72d36f, var(--accent-dark));
+      color: #fff;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24);
+    }
+
+    .btn-secondary {
+      background: #fff;
+      color: var(--outline);
+      border-color: var(--outline);
+    }
+
+    .msg {
+      min-height: 18px;
+      margin-top: 10px;
+      font-size: 13px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .err {
+      color: #b42318;
+    }
   </style>
 </head>
 <body>
-  <h1>Обработка персональных данных</h1>
-  <p>Ознакомьтесь с политикой и примите решение о согласии на обработку персональных данных.</p>
+  <div class="shell">
+    <div class="panel">
+      <h1>Обработка персональных данных</h1>
+      <p class="intro">Перед использованием бота необходимо ознакомиться с политикой и дать согласие на обработку персональных данных.</p>
 
-  <div class="card">
-    {% if policy_text %}
-    <pre class="policy">{{ policy_text }}</pre>
-    {% else %}
-    <p class="err">Текст политики не найден на сервере (файл POLICY_PERSONAL_DATA.md). Обратитесь к администратору.</p>
-    {% endif %}
+      <div class="policy-box">
+        {% if policy_text %}
+        <div id="policyContent"></div>
+        <script id="policySource" type="text/plain">{{ policy_text }}</script>
+        {% else %}
+        <p class="err">Текст политики не найден на сервере. Обратитесь к администратору.</p>
+        {% endif %}
+      </div>
+
+      <label class="checkbox-row">
+        <input type="checkbox" id="read">
+        <span>Я ознакомился(ась) с политикой</span>
+      </label>
+
+      <button class="btn btn-primary" id="btnAgree" disabled>Согласен</button>
+      <button class="btn btn-secondary" id="btnDecline">Не согласен</button>
+
+      <div class="msg" id="status"></div>
+    </div>
+
+    <p class="policy-note">Согласие можно отозвать в разделе «Мои данные».</p>
   </div>
-
-  <label class="row">
-    <input type="checkbox" id="read">
-    <span>Я ознакомился(ась) с политикой обработки персональных данных</span>
-  </label>
-
-  <button class="btn btn-primary" id="btnAgree" disabled>Согласен</button>
-  <button class="btn btn-secondary" id="btnDecline">Не согласен</button>
-
-  <div class="msg" id="status"></div>
 
   <script>
     const POLICY_VERSION = "{{ policy_version|escapejs }}";
@@ -67,52 +197,114 @@
     const btnAgree = document.getElementById("btnAgree");
     const btnDecline = document.getElementById("btnDecline");
     const status = document.getElementById("status");
+    const policySource = document.getElementById("policySource");
+    const policyContent = document.getElementById("policyContent");
+
+    function escapeHtml(text) {
+      return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    function formatInline(text) {
+      return escapeHtml(text)
+        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/\*([^*]+)\*/g, "<em>$1</em>");
+    }
+
+    function renderPolicy() {
+      if (!policySource || !policyContent) {
+        return;
+      }
+      const lines = policySource.textContent.split(/\r?\n/);
+      const parts = [];
+      let currentList = [];
+
+      function flushList() {
+        if (!currentList.length) {
+          return;
+        }
+        parts.push("<ul>" + currentList.map((item) => "<li>" + formatInline(item) + "</li>").join("") + "</ul>");
+        currentList = [];
+      }
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line || line === "---") {
+          flushList();
+          continue;
+        }
+        if (line.startsWith("## ")) {
+          flushList();
+          parts.push("<h2>" + formatInline(line.slice(3)) + "</h2>");
+          continue;
+        }
+        if (line.startsWith("# ")) {
+          flushList();
+          parts.push("<h2>" + formatInline(line.slice(2)) + "</h2>");
+          continue;
+        }
+        if (line.startsWith("- ")) {
+          currentList.push(line.slice(2));
+          continue;
+        }
+        flushList();
+        parts.push("<p>" + formatInline(line) + "</p>");
+      }
+      flushList();
+      policyContent.innerHTML = parts.join("");
+    }
+
+    function setStatus(text, isError) {
+      status.textContent = text || "";
+      status.className = isError ? "msg err" : "msg";
+    }
+
+    function apiUrl() {
+      return window.location.origin + "/api/webapp-consent/";
+    }
+
+    renderPolicy();
 
     readCb.addEventListener("change", () => {
       btnAgree.disabled = !readCb.checked;
     });
 
-    function apiUrl() {
-      const p = window.location.pathname;
-      if (p.includes("/webapp/consent")) {
-        return window.location.origin + "/api/webapp-consent/";
-      }
-      return "/api/webapp-consent/";
-    }
-
     btnAgree.addEventListener("click", async () => {
-      status.textContent = "";
+      setStatus("", false);
       if (!tg.initData) {
-        status.textContent = "Ошибка: нет данных Telegram (initData). Откройте страницу из бота.";
-        status.className = "msg err";
+        setStatus("Ошибка: нет данных Telegram. Откройте страницу из бота.", true);
         return;
       }
       btnAgree.disabled = true;
+      btnDecline.disabled = true;
       try {
         const r = await fetch(apiUrl(), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ init_data: tg.initData, version: POLICY_VERSION }),
+          body: JSON.stringify({ init_data: tg.initData, version: POLICY_VERSION })
         });
         const j = await r.json();
         if (!r.ok || !j.ok) {
-          status.textContent = (j && j.error) ? j.error : "Не удалось сохранить согласие.";
-          status.className = "msg err";
-          btnAgree.disabled = false;
+          setStatus((j && j.error) ? j.error : "Не удалось сохранить согласие.", true);
+          btnAgree.disabled = !readCb.checked;
+          btnDecline.disabled = false;
           return;
         }
-        status.textContent = "Согласие сохранено. Закройте окно и нажмите /start в боте.";
-        tg.close();
+        setStatus("Согласие сохранено. Возвращаем вас в бот.", false);
+        setTimeout(() => {
+          try { tg.close(); } catch (e) {}
+        }, 500);
       } catch (e) {
-        status.textContent = "Ошибка сети при сохранении согласия.";
-        status.className = "msg err";
-        btnAgree.disabled = false;
+        setStatus("Ошибка сети при сохранении согласия.", true);
+        btnAgree.disabled = !readCb.checked;
+        btnDecline.disabled = false;
       }
     });
 
     btnDecline.addEventListener("click", () => {
-      status.textContent = "Без согласия использование бота невозможно. Закройте окно.";
-      status.className = "msg";
+      setStatus("Без согласия использование бота невозможно.", false);
       try { tg.close(); } catch (e) {}
     });
   </script>

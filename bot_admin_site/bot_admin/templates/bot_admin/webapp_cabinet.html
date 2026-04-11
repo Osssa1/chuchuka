@@ -3,127 +3,158 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Кабинет пользователя</title>
+  <title>Профиль следователя</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
-    :root { color-scheme: light dark; }
+    :root {
+      color-scheme: light dark;
+      --panel-bg: rgba(255, 255, 255, 0.96);
+      --panel-border: rgba(15, 23, 42, 0.08);
+      --panel-shadow: 0 18px 42px rgba(15, 23, 42, 0.16);
+      --muted: #667085;
+      --accent: #63c766;
+      --disabled: #dbe2ea;
+      --disabled-text: #a0aab6;
+      --input-border: #d9dee7;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
     body {
       margin: 0;
-      padding: 12px 14px 24px;
+      min-height: 100vh;
+      padding: 24px 14px 26px;
       font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-      font-size: 15px;
-      line-height: 1.45;
-      background: var(--tg-theme-bg-color, #fff);
-      color: var(--tg-theme-text-color, #111);
+      background:
+        linear-gradient(180deg, rgba(118, 170, 233, 0.18), rgba(255, 255, 255, 0) 180px),
+        var(--tg-theme-secondary-bg-color, #eef4fb);
+      color: var(--tg-theme-text-color, #101828);
     }
-    h1, h2 { margin: 0 0 10px; }
-    h1 { font-size: 20px; }
-    h2 { font-size: 16px; }
-    p { margin: 0 0 12px; }
-    .card {
-      border-radius: 12px;
-      padding: 12px;
-      background: var(--tg-theme-secondary-bg-color, #f3f4f6);
-      margin-bottom: 12px;
+
+    .shell {
+      width: min(100%, 346px);
+      margin: 0 auto;
     }
-    .grid {
+
+    .panel {
+      border-radius: 22px;
+      padding: 18px 16px 14px;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      box-shadow: var(--panel-shadow);
+      backdrop-filter: blur(8px);
+    }
+
+    h1 {
+      margin: 0 0 14px;
+      font-size: 18px;
+      line-height: 1.2;
+      font-weight: 800;
+    }
+
+    .account-badge {
+      margin: 0 0 14px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(99, 199, 102, 0.12);
+      font-size: 12px;
+      color: #267a32;
+    }
+
+    .account-badge.is-muted {
+      background: rgba(102, 112, 133, 0.1);
+      color: var(--muted);
+    }
+
+    .fields {
       display: grid;
       gap: 10px;
     }
-    .row {
-      display: grid;
-      gap: 4px;
-    }
-    .label {
-      font-size: 13px;
-      color: var(--tg-theme-hint-color, #666);
-    }
-    .value {
-      font-size: 15px;
-      word-break: break-word;
-    }
-    input {
+
+    .field {
       width: 100%;
-      box-sizing: border-box;
-      border: 1px solid #ccc;
-      border-radius: 10px;
-      padding: 10px 12px;
+      border: 1px solid var(--input-border);
+      border-radius: 12px;
+      padding: 11px 12px;
+      background: #fff;
+      color: var(--tg-theme-text-color, #111827);
       font-size: 15px;
-      background: var(--tg-theme-bg-color, #fff);
-      color: var(--tg-theme-text-color, #111);
+      outline: none;
     }
+
+    .field::placeholder {
+      color: #98a2b3;
+    }
+
+    .meta {
+      margin-top: 12px;
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--muted);
+    }
+
     .btn {
       display: block;
       width: 100%;
-      padding: 12px 14px;
-      border-radius: 10px;
+      margin-top: 14px;
       border: none;
-      font-size: 16px;
+      border-radius: 14px;
+      padding: 13px 14px;
+      font-size: 15px;
+      line-height: 1.1;
+      font-weight: 600;
       cursor: pointer;
-      margin-top: 8px;
+      transition: opacity 0.15s ease;
     }
+
     .btn-primary {
-      background: #248b3e;
+      background: linear-gradient(180deg, #72d36f, #46b753);
       color: #fff;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24);
     }
+
+    .btn:disabled {
+      background: var(--disabled);
+      color: var(--disabled-text);
+      box-shadow: none;
+      cursor: not-allowed;
+    }
+
     .msg {
+      min-height: 18px;
       margin-top: 10px;
-      font-size: 14px;
-      color: #666;
+      font-size: 13px;
+      color: var(--muted);
+      text-align: center;
     }
-    .err {
-      color: #b00020;
+
+    .msg.err {
+      color: #b42318;
     }
   </style>
 </head>
 <body>
-  <h1>Кабинет</h1>
-  <p>Данные загружаются из Django и сохраняются обратно через API. Локально mini app ничего не хранит.</p>
+  <div class="shell">
+    <div class="panel">
+      <h1>Профиль следователя</h1>
 
-  <div class="card">
-    <h2>Учетная запись</h2>
-    <div class="grid">
-      <div class="row">
-        <div class="label">Telegram username</div>
-        <div class="value" id="accountUsername">-</div>
-      </div>
-      <div class="row">
-        <div class="label">ФИО из админки</div>
-        <div class="value" id="accountFio">-</div>
-      </div>
-      <div class="row">
-        <div class="label">Согласие на ПД</div>
-        <div class="value" id="accountConsent">-</div>
-      </div>
-      <div class="row">
-        <div class="label">Обновлено в админке</div>
-        <div class="value" id="accountUpdated">-</div>
-      </div>
-    </div>
-  </div>
+      <div class="account-badge is-muted" id="accountBadge">Загрузка данных профиля...</div>
 
-  <div class="card">
-    <h2>Профиль для справки</h2>
-    <div class="grid">
-      <label class="row">
-        <span class="label">Должность</span>
-        <input id="position" maxlength="255" placeholder="Например: старший инспектор">
-      </label>
-      <label class="row">
-        <span class="label">Подразделение</span>
-        <input id="unit" maxlength="255" placeholder="Например: отдел аналитики">
-      </label>
-      <label class="row">
-        <span class="label">Специальное звание</span>
-        <input id="rank" maxlength="255" placeholder="Например: капитан">
-      </label>
-      <label class="row">
-        <span class="label">ФИО для подписи</span>
-        <input id="signatureName" maxlength="255" placeholder="Например: И.И.Иванов">
-      </label>
+      <div class="fields">
+        <input class="field" id="position" maxlength="255" placeholder="Должность">
+        <input class="field" id="unit" maxlength="255" placeholder="Подразделение">
+        <input class="field" id="rank" maxlength="255" placeholder="Звание">
+        <input class="field" id="signatureName" maxlength="255" placeholder="ФИО">
+      </div>
+
+      <button class="btn btn-primary" id="btnSave" disabled>Продолжить</button>
+
+      <div class="msg" id="status"></div>
     </div>
-    <button class="btn btn-primary" id="btnSave">Сохранить</button>
-    <div class="msg" id="status"></div>
+
+    <div class="meta" id="metaText">Продолжить неактивна, пока не дано согласие.</div>
   </div>
 
   <script>
@@ -133,6 +164,9 @@
 
     const statusEl = document.getElementById("status");
     const btnSave = document.getElementById("btnSave");
+    const badgeEl = document.getElementById("accountBadge");
+    const metaEl = document.getElementById("metaText");
+    let accountState = null;
 
     function apiUrl() {
       return window.location.origin + "/api/webapp-profile/";
@@ -145,22 +179,39 @@
 
     function fmtDate(value) {
       if (!value) {
-        return "-";
+        return "";
       }
       const date = new Date(value);
       if (Number.isNaN(date.getTime())) {
         return value;
       }
-      return date.toLocaleString("ru-RU");
+      return date.toLocaleDateString("ru-RU");
+    }
+
+    function canProceed() {
+      return Boolean(accountState && accountState.consent_at);
+    }
+
+    function updateButtonState() {
+      btnSave.disabled = !canProceed();
+      if (canProceed()) {
+        metaEl.textContent = "Профиль хранится в админке Django и будет подставляться в справки после сохранения.";
+      } else {
+        metaEl.textContent = "Продолжить неактивна, пока не дано согласие.";
+      }
     }
 
     function fillAccount(account) {
-      document.getElementById("accountUsername").textContent = account.telegram_username || "-";
-      document.getElementById("accountFio").textContent = account.fio || "-";
-      document.getElementById("accountConsent").textContent = account.consent_at
-        ? "Принято (" + fmtDate(account.consent_at) + ")"
-        : "Не принято";
-      document.getElementById("accountUpdated").textContent = fmtDate(account.updated_at);
+      accountState = account || {};
+      const name = account.fio || account.telegram_username || "Пользователь";
+      if (account.consent_at) {
+        badgeEl.textContent = name + ". Согласие получено " + fmtDate(account.consent_at) + ".";
+        badgeEl.className = "account-badge";
+      } else {
+        badgeEl.textContent = name + ". Для продолжения сначала нужно дать согласие на обработку персональных данных.";
+        badgeEl.className = "account-badge is-muted";
+      }
+      updateButtonState();
     }
 
     function fillProfile(profile) {
@@ -174,7 +225,6 @@
     async function loadProfile() {
       if (!tg.initData) {
         setStatus("Ошибка: нет данных Telegram. Откройте мини-приложение из бота.", true);
-        btnSave.disabled = true;
         return;
       }
       setStatus("Загрузка данных...", false);
@@ -187,15 +237,13 @@
         const data = await response.json();
         if (!response.ok || !data.ok) {
           setStatus((data && data.error) ? data.error : "Не удалось загрузить кабинет.", true);
-          btnSave.disabled = true;
           return;
         }
         fillAccount(data.account || {});
         fillProfile(data.profile);
-        setStatus("Данные загружены.", false);
+        setStatus("", false);
       } catch (error) {
         setStatus("Ошибка сети при загрузке данных.", true);
-        btnSave.disabled = true;
       }
     }
 
@@ -204,8 +252,12 @@
         setStatus("Ошибка: нет данных Telegram. Откройте мини-приложение из бота.", true);
         return;
       }
+      if (!canProceed()) {
+        setStatus("Сначала необходимо дать согласие на обработку персональных данных.", true);
+        return;
+      }
       btnSave.disabled = true;
-      setStatus("Сохраняю...", false);
+      setStatus("Сохраняю профиль...", false);
       try {
         const response = await fetch(apiUrl(), {
           method: "POST",
@@ -223,16 +275,16 @@
         const data = await response.json();
         if (!response.ok || !data.ok) {
           setStatus((data && data.error) ? data.error : "Не удалось сохранить профиль.", true);
-          btnSave.disabled = false;
+          updateButtonState();
           return;
         }
         fillAccount(data.account || {});
         fillProfile(data.profile);
-        setStatus("Профиль сохранен.", false);
+        setStatus("Профиль сохранен. Можно продолжить работу в боте.", false);
       } catch (error) {
         setStatus("Ошибка сети при сохранении профиля.", true);
       }
-      btnSave.disabled = false;
+      updateButtonState();
     });
 
     loadProfile();
