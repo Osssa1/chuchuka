@@ -23,7 +23,16 @@ ALLOWED_USER_IDS: list[int] = [
 BOT_ALLOWED_LIST_URL: str = os.environ.get("BOT_ALLOWED_LIST_URL", "http://127.0.0.1:8000/api/allowed-ids/")
 
 import requests
-from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, WebAppInfo
+from telegram import (
+    Update,
+    BotCommand,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputFile,
+    WebAppInfo,
+    MenuButtonCommands,
+    MenuButtonWebApp,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -610,6 +619,13 @@ async def post_init(app: Application) -> None:
             BotCommand("phone", "Оператор по номеру"),
         ]
     )
+    cabinet = _cabinet_miniapp_url()
+    if cabinet:
+        await app.bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(text="Кабинет", web_app=WebAppInfo(url=cabinet))
+        )
+    else:
+        await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
 
 @_allowed_only(require_consent=False)
