@@ -538,38 +538,38 @@ def _normalize_domain_lookup(
 ) -> Optional[dict[str, Any]]:
     """Сводит ответы разных сервисов к общей структуре."""
     parsed_domain = _clean_lookup_value(
-        _get_nested(
-            data,
-            "domainName",
-            "domain_name",
-            "domain",
+            _get_nested(
+                data,
+                "domainName",
+                "domain_name",
+                "domain",
             "ldhName",
             "unicodeName",
-            "name",
-        )
-    ) or domain
+                "name",
+            )
+        ) or domain
     parsed_domain = parsed_domain.lower()
 
     created = _clean_lookup_value(
-        _get_nested(
-            data,
+            _get_nested(
+                data,
             "created",
-            "createdDate",
+                "createdDate",
             "creationDate",
-            "created_date",
-            "creation_date",
+                "created_date",
+                "creation_date",
             "standardCreatedDate",
+            )
         )
-    )
     expires = _clean_lookup_value(
-        _get_nested(
-            data,
+            _get_nested(
+                data,
             "expires",
-            "expiresDate",
+                "expiresDate",
             "expirationDate",
-            "expiryDate",
-            "expiration_date",
-            "expires_date",
+                "expiryDate",
+                "expiration_date",
+                "expires_date",
             "standardExpiresDate",
         )
     )
@@ -739,7 +739,7 @@ def _format_domain_lookup_text(result: dict[str, Any]) -> str:
         if result.get("registrar_url")
         else ""
     )
-    return (
+        return (
         f"{E_DOMAIN} <b>Информация по домену</b>: <code>{_h(result.get('domain'))}</code>\n"
         f"{DIV}\n"
         f"{E_DATE} <b>Создан:</b> {_h(result.get('created'))}\n"

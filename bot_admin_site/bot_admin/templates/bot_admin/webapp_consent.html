@@ -265,6 +265,10 @@
       return window.location.origin + "/api/webapp-consent/";
     }
 
+    function cabinetUrl() {
+      return window.location.origin + "/webapp/cabinet/";
+    }
+
     renderPolicy();
 
     readCb.addEventListener("change", () => {
@@ -292,10 +296,10 @@
           btnDecline.disabled = false;
           return;
         }
-        setStatus("Согласие сохранено. Возвращаем вас в бот.", false);
+        setStatus("Согласие сохранено. Открываем профиль.", false);
         setTimeout(() => {
-          try { tg.close(); } catch (e) {}
-        }, 500);
+          window.location.href = cabinetUrl();
+        }, 350);
       } catch (e) {
         setStatus("Ошибка сети при сохранении согласия.", true);
         btnAgree.disabled = !readCb.checked;

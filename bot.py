@@ -738,9 +738,9 @@ async def privacy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             lines.append("• Записей не найдено.")
         lines.append("")
         lines.append(f"Для исправления неточных данных или отзыва согласия обратитесь к оператору: {OPERATOR_CONTACT_EMAIL}")
-        await update.message.reply_text(
+    await update.message.reply_text(
             "\n".join(lines),
-            parse_mode="HTML",
+        parse_mode="HTML",
             reply_markup=PRIVACY_DELETE_KEYBOARD,
         )
     else:
